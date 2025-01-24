@@ -5,7 +5,7 @@ const axios = require("axios");
 const app = express();
 app.use(bodyParser.json());
 
-const OPENAI_API_KEY = "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";
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 app.post("/chatgpt", async (req, res) => {
   try {
