@@ -8,6 +8,9 @@
 .buildlog/
 .history
 .svn/
+
+# Environment files
+chatgpt-backend/.env
 .env
 migrate_working_dir/
 
