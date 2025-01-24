@@ -1,0 +1,32 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Règles spécifiques pour les messages
+    match /channels/{channelId}/messages/{messageId} {
+      // Lecture autorisée pour tous les utilisateurs authentifiés
+      allow read: if request.auth != null;
+      
+      // Écriture autorisée uniquement pour :
+      // - Le propriétaire du message
+      // - ChatGPT (userId = 'ChatGPT')
+      allow create: if request.auth != null;
+      allow update: if 
+        request.auth != null &&
+        (
+          request.auth.uid == resource.data.userId ||
+          resource.data.userId == 'ChatGPT'
+        ) &&
+        request.resource.data.keys().hasOnly(['content', 'status', 'timestamp']) &&
+        request.resource.data.content is string &&
+        request.resource.data.status is string &&
+        request.resource.data.timestamp is timestamp;
+    }
+    
+    // Règles par défaut pour les autres documents
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
