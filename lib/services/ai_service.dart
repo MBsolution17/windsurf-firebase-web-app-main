@@ -1,5 +1,6 @@
 // lib/services/ai_service.dart
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
@@ -7,7 +8,6 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:http/http.dart' as http;
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:archive/archive.dart';
 import 'package:xml/xml.dart';
@@ -15,20 +15,7 @@ import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:flutter_tts/flutter_tts.dart';
 
 import '../models/chat_message.dart';
-
-/// Enumération des types d'actions que l'IA peut exécuter.
-enum AIActionType {
-  create_task,
-  update_task,
-  delete_task,
-  create_event,
-  update_event,
-  delete_event,
-  create_folder_with_document,
-  add_contact,
-  create_folder_and_add_contact,
-  modify_document,
-}
+import '../models/action_event.dart'; // Import de ActionEvent
 
 /// Service d'IA responsable de l'interaction avec OpenAI et Firestore.
 class AIService with ChangeNotifier {
@@ -38,8 +25,14 @@ class AIService with ChangeNotifier {
   // Charger la clé API depuis les variables d'environnement pour plus de sécurité
   // Assurez-vous d'ajouter votre clé API dans un fichier .env et de l'inclure dans votre projet.
   // Ne stockez jamais de clés API directement dans le code source.
-  static const String _apiKey =
-      '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'; // Remplacez par votre clé API réelle et sécurisée
+
+
+
+  
+  // clef ici 
+
+
+
 
   // Map des handlers d'actions
   late final Map<AIActionType, Future<void> Function(Map<String, dynamic>)> _actionHandlers;
@@ -53,6 +46,12 @@ class AIService with ChangeNotifier {
   // Variables pour la validation des messages
   bool _showValidationButtons = false;
   ChatMessage? _messageToValidate;
+
+  // StreamController pour les événements d'action
+  final StreamController<ActionEvent> _actionController = StreamController<ActionEvent>.broadcast();
+
+  /// Expose le flux d'événements d'action.
+  Stream<ActionEvent> get actionStream => _actionController.stream;
 
   /// Constructeur initialisant les handlers d'actions et les services vocaux.
   AIService() {
@@ -74,10 +73,10 @@ class AIService with ChangeNotifier {
     _flutterTts = FlutterTts();
   }
 
-  //---------------------------------------------------------------------------
+  //----------------------------------------------------------------------------
   // 1) OBTENIR LA RÉPONSE DE L'IA
-  //---------------------------------------------------------------------------
-  
+  //----------------------------------------------------------------------------
+
   /// Envoie une requête à l'API OpenAI et obtient la réponse.
   Future<String> getAIResponse(String prompt) async {
     if (_apiKey.isEmpty) {
@@ -221,7 +220,7 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
           'Authorization': 'Bearer $_apiKey',
         },
         body: jsonEncode({
-          'model': 'gpt-3.5-turbo',
+          'model': 'gpt-3.5-turbo', // Remplacez par le modèle que vous utilisez
           'messages': [
             {'role': 'system', 'content': systemPrompt},
             {'role': 'user', 'content': prompt},
@@ -246,10 +245,10 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
     }
   }
 
-  //---------------------------------------------------------------------------
+  //----------------------------------------------------------------------------
   // 2) ENVOYER UN MESSAGE ET GÉRER LA RÉPONSE
-  //---------------------------------------------------------------------------
-  
+  //----------------------------------------------------------------------------
+
   /// Envoie un message utilisateur, obtient la réponse de l'IA et prépare les messages pour validation.
   Future<ChatMessage> sendMessage(String messageContent) async {
     final currentUser = _auth.currentUser;
@@ -314,10 +313,10 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
     return aiMessage;
   }
 
-  //---------------------------------------------------------------------------
+  //----------------------------------------------------------------------------
   // 3) MODIFIER UN MESSAGE AVANT SAUVEGARDE
-  //---------------------------------------------------------------------------
-  
+  //----------------------------------------------------------------------------
+
   /// Permet de modifier le contenu d'un message avant son enregistrement.
   ///
   /// [message] : Message utilisateur à modifier.
@@ -335,10 +334,10 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
     return message;
   }
 
-  //---------------------------------------------------------------------------
+  //----------------------------------------------------------------------------
   // 4) SAUVEGARDER UN MESSAGE (USER OU AI)
-  //---------------------------------------------------------------------------
-  
+  //----------------------------------------------------------------------------
+
   /// Sauvegarde un message dans Firestore.
   ///
   /// [message] : Message à sauvegarder.
@@ -347,16 +346,17 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
       debugPrint('Enregistrement du message Firestore: ${message.toMap()}');
       await _firestore.collection('chat_messages').doc(message.id).set(message.toMap());
       debugPrint('Message sauvegardé.');
+      notifyListeners();
     } catch (e) {
       debugPrint('Erreur enregistrement message: $e');
       // Optionnel : Notifier l'utilisateur de l'erreur via un SnackBar ou autre
     }
   }
 
-  //---------------------------------------------------------------------------
+  //----------------------------------------------------------------------------
   // 5) STREAM D'HISTORIQUE DU CHAT
-  //---------------------------------------------------------------------------
-  
+  //----------------------------------------------------------------------------
+
   /// Retourne un stream de l'historique des messages du chat.
   ///
   /// Inclut les messages de l'utilisateur actuel et de l'assistant IA.
@@ -377,16 +377,17 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
             .toList());
   }
 
-  //---------------------------------------------------------------------------
+  //----------------------------------------------------------------------------
   // 6) TENTER D'EXÉCUTER UNE ACTION SI LA RÉPONSE EST EN JSON
-  //---------------------------------------------------------------------------
-  
+  //----------------------------------------------------------------------------
+
   /// Tente d'exécuter des actions définies dans la réponse de l'IA.
   ///
   /// [aiResponse] : Réponse de l'IA potentiellement contenant des actions JSON.
+  /// [executedActions] : Liste pour stocker les types d'actions exécutées.
   ///
   /// Retourne `true` si au moins une action a été exécutée, `false` sinon.
-  Future<bool> _tryExecuteAction(String aiResponse) async {
+  Future<bool> _tryExecuteAction(String aiResponse, List<AIActionType> executedActions) async {
     try {
       // Extraire tous les blocs JSON de la réponse de l'IA
       List<Map<String, dynamic>> actions = _extractJsonResponses(aiResponse);
@@ -397,7 +398,7 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
       }
       
       bool atLeastOneActionExecuted = false;
-      
+
       for (var actionObj in actions) {
         debugPrint('JSON parsé: $actionObj');
 
@@ -439,8 +440,16 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
         await handler(data);
         await _saveActionLog(json.encode(actionObj));
         atLeastOneActionExecuted = true;
+        executedActions.add(actionType);
       }
-      
+
+      if (atLeastOneActionExecuted) {
+        // Émettre des événements pour chaque action exécutée
+        for (var action in executedActions) {
+          _actionController.add(ActionEvent(actionType: action));
+        }
+      }
+
       return atLeastOneActionExecuted;
       
     } catch (e) {
@@ -449,10 +458,10 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
     }
   }
 
-  //---------------------------------------------------------------------------
+  //----------------------------------------------------------------------------
   // 7) SAUVEGARDER UN LOG D'ACTION
-  //---------------------------------------------------------------------------
-  
+  //----------------------------------------------------------------------------
+
   /// Sauvegarde un log d'action dans Firestore.
   ///
   /// [aiResponse] : Réponse de l'IA contenant l'action exécutée.
@@ -460,7 +469,7 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
     try {
       await _firestore.collection('ai_actions_logs').add({
         'response': aiResponse,
-        'timestamp': Timestamp.fromDate(DateTime.now()), // Stocker en Timestamp
+        'timestamp': Timestamp.fromDate(DateTime.now()),
         'userId': _auth.currentUser?.uid ?? 'unknown',
       });
       debugPrint('Action log sauvegardé dans Firestore.');
@@ -469,10 +478,10 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
     }
   }
 
-  //---------------------------------------------------------------------------
+  //----------------------------------------------------------------------------
   // 8) EXTRAIRE LES VARIABLES D'UN FICHIER DOCX
-  //---------------------------------------------------------------------------
-  
+  //----------------------------------------------------------------------------
+
   /// Extrait les variables de type {{variable}} d'un fichier DOCX.
   ///
   /// [docxBytes] : Contenu binaire du fichier DOCX.
@@ -513,10 +522,10 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
     }
   }
 
-  //---------------------------------------------------------------------------
+  //----------------------------------------------------------------------------
   // 9) MODIFIER LE FICHIER DOCX AVEC LES VALEURS DES VARIABLES
-  //---------------------------------------------------------------------------
-  
+  //----------------------------------------------------------------------------
+
   /// Modifie un fichier DOCX en remplaçant les variables par leurs valeurs.
   ///
   /// [docxBytes] : Contenu binaire du fichier DOCX.
@@ -560,6 +569,7 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
       }
 
       // Gérer les listes dynamiques comme invoice_items ici si nécessaire
+      // Par exemple : _replaceInvoiceItems(xmlDoc, invoiceItemsJson);
 
       final modifiedXml = xmlDoc.toXmlString();
       debugPrint('XML modifié: $modifiedXml');
@@ -588,10 +598,10 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
     }
   }
 
-  //---------------------------------------------------------------------------
+  //----------------------------------------------------------------------------
   // 10) REMPLACER LES LISTES DYNAMIQUES (invoice_items)
-  //---------------------------------------------------------------------------
-  
+  //----------------------------------------------------------------------------
+
   /// Remplace les listes dynamiques `invoice_items` dans un document XML.
   ///
   /// [xmlDoc] : Document XML du fichier DOCX.
@@ -752,10 +762,10 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
     }
   }
 
-  //---------------------------------------------------------------------------
+  //----------------------------------------------------------------------------
   // 11) HANDLE MODIFY_DOCUMENT
-  //---------------------------------------------------------------------------
-  
+  //----------------------------------------------------------------------------
+
   /// Gère la modification d'un document en remplissant les variables.
   ///
   /// [data] : Données contenant les informations nécessaires à la modification.
@@ -875,10 +885,10 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
     }
   }
 
-  //---------------------------------------------------------------------------
+  //----------------------------------------------------------------------------
   // 12) COMPLÉTER LES VARIABLES MANQUANTES
-  //---------------------------------------------------------------------------
-  
+  //----------------------------------------------------------------------------
+
   /// Complète les variables manquantes avec des valeurs par défaut.
   ///
   /// [extractedVariables] : Liste des variables extraites du document.
@@ -953,10 +963,10 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
     }
   }
 
-  //---------------------------------------------------------------------------
+  //----------------------------------------------------------------------------
   // Méthodes Utilitaires
-  //---------------------------------------------------------------------------
-  
+  //----------------------------------------------------------------------------
+
   /// Recompose le texte d'un paragraphe XML.
   ///
   /// [paragraph] : Élément XML représentant un paragraphe.
@@ -1012,10 +1022,10 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
     return defaultValue;
   }
 
-  //---------------------------------------------------------------------------
+  //----------------------------------------------------------------------------
   // **Intégration de la Reconnaissance Vocale et de la Synthèse Vocale**
-  //---------------------------------------------------------------------------
-  
+  //----------------------------------------------------------------------------
+
   /// Démarre l'écoute vocale.
   ///
   /// [onResult] : Callback appelé avec le texte reconnu une fois l'écoute terminée.
@@ -1075,10 +1085,10 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
   /// Indique si l'écoute vocale est en cours.
   bool get isListening => _isListening;
 
-  //---------------------------------------------------------------------------
+  //----------------------------------------------------------------------------
   // Gestion de la validation des messages
-  //---------------------------------------------------------------------------
-  
+  //----------------------------------------------------------------------------
+
   /// Gère la validation ou le rejet d'un message
   Future<void> handleValidation(String messageId, MessageStatus status) async {
     if (_messageToValidate == null || _messageToValidate!.id != messageId) return;
@@ -1127,10 +1137,10 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
     }
   }
 
-  //---------------------------------------------------------------------------
+  //----------------------------------------------------------------------------
   // HANDLERS POUR LES DIFFÉRENTES ACTIONS
-  //---------------------------------------------------------------------------
-  
+  //----------------------------------------------------------------------------
+
   /// Gère la création d'une tâche.
   Future<void> _handleCreateTask(Map<String, dynamic> data) async {
     final FirebaseFirestore firestore = FirebaseFirestore.instance;
@@ -1590,10 +1600,10 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
     }
   }
 
-  //---------------------------------------------------------------------------
+  //----------------------------------------------------------------------------
   // Nettoyage et extraction des blocs JSON de la réponse de l'IA
-  //---------------------------------------------------------------------------
-  
+  //----------------------------------------------------------------------------
+
   /**
    * Extrait tous les blocs JSON de la réponse de l'IA en supprimant les blocs de code Markdown.
    * Retourne une liste de Map<String, dynamic>.
@@ -1618,17 +1628,82 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
       }
     }
   }
-  
-  //---------------------------------------------------------------------------
-  // Méthodes d'assistance supplémentaires (extraction, modification, etc.)
-  //---------------------------------------------------------------------------
-  
-  // ... (Les méthodes déjà fournies précédemment)
 
-  //---------------------------------------------------------------------------
+  //----------------------------------------------------------------------------
+  // 13) MÉTHODE POUR VÉRIFIER SI UNE CHAÎNE EST UN JSON VALIDE
+  //----------------------------------------------------------------------------
+
+  /// Vérifie si une chaîne est un JSON valide.
+  ///
+  /// [str] : Chaîne à vérifier.
+  ///
+  /// Retourne `true` si c'est un JSON valide, sinon `false`.
+  bool _isJson(String str) {
+    try {
+      json.decode(str);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  //----------------------------------------------------------------------------
+  // 14) EXÉCUTER LES ACTIONS À PARTIR DU MESSAGE
+  //----------------------------------------------------------------------------
+
+  /// Exécute les actions basées sur le contenu d'un message validé.
+  ///
+  /// [message] : Message validé contenant des actions JSON.
+  Future<void> executeActionsFromMessage(ChatMessage message) async {
+    if (message.status != MessageStatus.validated) {
+      debugPrint('Message non validé: ${message.id}');
+      return;
+    }
+
+    List<AIActionType> executedActions = [];
+
+    bool actionExecuted = await _tryExecuteAction(message.content, executedActions);
+    if (actionExecuted) {
+      debugPrint('Actions exécutées pour le message: ${message.id}');
+      // Émission des événements pour chaque action exécutée
+      for (var action in executedActions) {
+        _actionController.add(ActionEvent(actionType: action));
+      }
+    } else {
+      debugPrint('Aucune action exécutée pour le message: ${message.id}');
+    }
+  }
+
+  /// Modifie le contenu d'un message et exécute les actions basées sur le contenu modifié.
+  ///
+  /// [message] : Message à modifier.
+  /// [newContent] : Nouveau contenu du message.
+  Future<void> modifyAndExecuteActions(ChatMessage message, String newContent) async {
+    // Valider que le nouveau contenu est un JSON valide
+    if (!_isJson(newContent)) {
+      throw Exception('Le contenu modifié doit être un JSON valide.');
+    }
+
+    // Mettre à jour le message avec le nouveau contenu
+    await updateMessage(message.id, newContent, isDraft: false);
+
+    // Obtenir le message mis à jour
+    DocumentSnapshot updatedDoc = await _firestore.collection('chat_messages').doc(message.id).get();
+    ChatMessage updatedMessage = ChatMessage.fromFirestore(updatedDoc);
+
+    // Exécuter les actions basées sur le nouveau contenu
+    bool actionExecuted = await _tryExecuteAction(updatedMessage.content, []);
+    if (actionExecuted) {
+      debugPrint('Actions exécutées pour le message modifié: ${message.id}');
+    } else {
+      debugPrint('Aucune action exécutée pour le message modifié: ${message.id}');
+    }
+  }
+
+  //----------------------------------------------------------------------------
   // Méthode pour mettre à jour un message existant
-  //---------------------------------------------------------------------------
-  
+  //----------------------------------------------------------------------------
+
   /// Met à jour le contenu d'un message existant dans Firestore.
   ///
   /// [messageId] : ID du message à mettre à jour.
@@ -1681,92 +1756,15 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
     }
   }
 
-  //---------------------------------------------------------------------------
-  // 13) MÉTHODE POUR VÉRIFIER SI UNE CHAÎNE EST UN JSON VALIDE
-  //---------------------------------------------------------------------------
-  
-  /// Vérifie si une chaîne est un JSON valide.
-  ///
-  /// [str] : Chaîne à vérifier.
-  ///
-  /// Retourne `true` si c'est un JSON valide, sinon `false`.
-  bool _isJson(String str) {
-    try {
-      json.decode(str);
-      return true;
-    } catch (e) {
-      return false;
-    }
-  }
-
-  //---------------------------------------------------------------------------
-  // 14) EXÉCUTER LES ACTIONS À PARTIR DU MESSAGE
-  //---------------------------------------------------------------------------
-  
-  /// Exécute les actions basées sur le contenu d'un message validé.
-  ///
-  /// [message] : Message validé contenant des actions JSON.
-  Future<void> executeActionsFromMessage(ChatMessage message) async {
-    if (message.status != MessageStatus.validated) {
-      debugPrint('Message non validé: ${message.id}');
-      return;
-    }
-
-    bool actionExecuted = await _tryExecuteAction(message.content);
-    if (actionExecuted) {
-      debugPrint('Actions exécutées pour le message: ${message.id}');
-    } else {
-      debugPrint('Aucune action exécutée pour le message: ${message.id}');
-    }
-  }
-
-  /// Modifie le contenu d'un message et exécute les actions basées sur le contenu modifié.
-  ///
-  /// [message] : Message à modifier.
-  /// [newContent] : Nouveau contenu du message.
-  Future<void> modifyAndExecuteActions(ChatMessage message, String newContent) async {
-    // Valider que le nouveau contenu est un JSON valide
-    if (!_isJson(newContent)) {
-      throw Exception('Le contenu modifié doit être un JSON valide.');
-    }
-
-    // Mettre à jour le message avec le nouveau contenu
-    await updateMessage(message.id, newContent, isDraft: false);
-
-    // Obtenir le message mis à jour
-    DocumentSnapshot updatedDoc = await _firestore.collection('chat_messages').doc(message.id).get();
-    ChatMessage updatedMessage = ChatMessage.fromFirestore(updatedDoc);
-
-    // Exécuter les actions basées sur le nouveau contenu
-    bool actionExecuted = await _tryExecuteAction(updatedMessage.content);
-    if (actionExecuted) {
-      debugPrint('Actions exécutées pour le message modifié: ${message.id}');
-    } else {
-      debugPrint('Aucune action exécutée pour le message modifié: ${message.id}');
-    }
-  }
-
-  //---------------------------------------------------------------------------
-  // Exposer les méthodes de validation pour l'UI
-  //---------------------------------------------------------------------------
-  
-  /// Expose la méthode pour exécuter les actions depuis l'UI.
-  Future<void> validateAndExecuteActions(ChatMessage message) async {
-    await executeActionsFromMessage(message);
-  }
-
-  /// Expose la méthode pour modifier et exécuter les actions depuis l'UI.
-  Future<void> modifyAndExecute(ChatMessage message, String newContent) async {
-    await modifyAndExecuteActions(message, newContent);
-  }
-
-  //---------------------------------------------------------------------------
+  //----------------------------------------------------------------------------
   // Dispose des ressources
-  //---------------------------------------------------------------------------
+  //----------------------------------------------------------------------------
+
   @override
   void dispose() {
     _speechRecognizer.cancel();
     _flutterTts.stop();
+    _actionController.close(); // Fermer le StreamController
     super.dispose();
   }
 }

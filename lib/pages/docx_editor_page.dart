@@ -1,5 +1,4 @@
 // lib/pages/docx_editor_page.dart
-//  static const String _apiKey =    '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'; // Remplacez par votre clé API réelle et sécurisé
   //
 import 'dart:typed_data';
 import 'dart:convert'; // For jsonEncode if needed

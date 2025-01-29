@@ -22,6 +22,7 @@ import 'pages/voice_assistant_page.dart';
 import 'pages/calendar_page.dart';
 import 'pages/analytics_page.dart';
 import 'pages/contact_page.dart'; // Import de ContactPage
+import 'pages/profile_page.dart'; // Import de ProfilePage
 
 // Import des services
 import 'services/channel_list_page.dart';
@@ -114,22 +115,24 @@ class MyApp extends StatelessWidget {
           return const LandingPage();
         },
       ),
-      routes: {
-        '/login': (context) => const LoginPage(),
-        '/register': (context) => const RegisterPage(),
-        '/dashboard': (context) => const AuthGuard(child: DashboardPage()),
-        '/channel_list': (context) => const AuthGuard(child: ChannelListPage()),
-        '/create_channel': (context) => const AuthGuard(child: CreateChannelPage()),
-        '/friends': (context) => const AuthGuard(child: FriendsPage()),
-        '/task_tracker': (context) => const AuthGuard(child: TaskTrackerPage()),
-        '/documents': (context) => const AuthGuard(child: DocumentPage()),
-        '/voice_assistant': (context) => const AuthGuard(child: VoiceAssistantPage()),
-        '/calendar': (context) => const AuthGuard(child: CalendarPage()),
-        '/analytics': (context) => const AuthGuard(child: AnalyticsPage()), // Route ajoutée
-        '/contact_page': (context) => const AuthGuard(child: ContactPage()), // Route pour ContactPage
-        // '/chat': (context) => const ChatPage(), // Supprimé pour éviter les erreurs
-        // Ajoutez les autres routes ici si nécessaire
-      },
+routes: {
+  '/login': (context) => const LoginPage(),
+  '/register': (context) => const RegisterPage(),
+  '/dashboard': (context) => const AuthGuard(child: DashboardPage()),
+  '/channel_list': (context) => const AuthGuard(child: ChannelListPage()),
+  '/create_channel': (context) => const AuthGuard(child: CreateChannelPage()),
+  '/friends': (context) => const AuthGuard(child: FriendsPage()),
+  '/task_tracker': (context) => const AuthGuard(child: TaskTrackerPage()),
+  '/documents': (context) => const AuthGuard(child: DocumentPage()),
+  '/voice_assistant': (context) => const AuthGuard(child: VoiceAssistantPage()),
+  '/calendar': (context) => const AuthGuard(child: CalendarPage()),
+  '/analytics': (context) => const AuthGuard(child: AnalyticsPage()),
+  '/contact_page': (context) => const AuthGuard(child: ContactPage()),
+  '/profile_page': (context) => const AuthGuard(child: ProfilePage()),
+  '/document_page': (context) => const AuthGuard(child: DocumentPage()),
+
+  // ...
+},
       onGenerateRoute: _onGenerateRoute,
     );
   }

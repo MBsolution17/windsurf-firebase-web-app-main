@@ -2,11 +2,13 @@
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+/// Enumération des types de messages.
 enum MessageType {
   user,
   ai,
 }
 
+/// Enumération des statuts des messages.
 enum MessageStatus {
   pending_validation,  // En attente de validation
   validated,           // Validé par l'utilisateur
@@ -14,6 +16,7 @@ enum MessageStatus {
   modified,            // Modifié par l'utilisateur
 }
 
+/// Modèle de données pour un message de chat.
 class ChatMessage {
   final String id;
   final String content;
@@ -23,7 +26,7 @@ class ChatMessage {
   final String userEmail;
   final MessageStatus status;
   final bool isDraft;
-  final int? version; // Added version property
+  final int version; // version est maintenant non nullable
 
   ChatMessage({
     required this.id,
@@ -34,8 +37,9 @@ class ChatMessage {
     DateTime? timestamp,
     this.status = MessageStatus.pending_validation,
     this.isDraft = false,
-    this.version, // Added version parameter
-  }) : timestamp = timestamp ?? DateTime.now();
+    int? version, // version reste optionnel dans le constructeur
+  })  : timestamp = timestamp ?? DateTime.now(),
+        version = version ?? 0; // Assignation avec valeur par défaut
 
   /// Factory method to create a ChatMessage from a Firestore DocumentSnapshot
   factory ChatMessage.fromFirestore(DocumentSnapshot doc) {
@@ -55,7 +59,7 @@ class ChatMessage {
           (e) => e.toString().split('.').last == data['status'],
           orElse: () => MessageStatus.pending_validation),
       isDraft: data['isDraft'] ?? false,
-      version: data['version'] ?? 0, // Handle version
+      version: data['version'] ?? 0, // Assignation avec valeur par défaut
     );
   }
 
@@ -69,7 +73,7 @@ class ChatMessage {
       'timestamp': Timestamp.fromDate(timestamp),
       'status': status.toString().split('.').last,
       'isDraft': isDraft,
-      'version': version ?? 0, // Include version
+      'version': version, // version est non nullable
     };
   }
 
@@ -93,7 +97,13 @@ class ChatMessage {
       timestamp: timestamp ?? this.timestamp,
       status: status ?? this.status,
       isDraft: isDraft ?? this.isDraft,
-      version: version ?? this.version,
+      version: version ?? this.version, // version est non nullable
     );
   }
+
+  /// Indique si le message est de type IA
+  bool get isAI => type == MessageType.ai;
+
+  /// Indique si le message est de type utilisateur
+  bool get isUser => type == MessageType.user;
 }

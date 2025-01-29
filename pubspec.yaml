@@ -10,6 +10,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  json_tree_viewer: ^0.0.2
 
   # Core Packages
   http: ^1.2.2
@@ -71,6 +72,8 @@ dependencies:
   video_player: ^2.5.1  # Check for the latest version
   audioplayers: ^6.1.0
   dio: ^5.7.0
+  image_picker: ^1.1.2
+  tuple: ^2.0.2
 
 dev_dependencies:
   flutter_test:
@@ -133,4 +136,3 @@ flutter:
         - asset: assets/fonts/NotoSans-Regular.ttf
           weight: 400
           style: normal
-

@@ -226,4 +226,14 @@ ${bodyHtml ?? bodyText}
     await _gmailApi!.users.messages.send(message, 'me');
     print('E-mail envoyé à $recipientEmail');
   }
+
+  /// Méthode pour mettre à jour le nom affiché
+  Future<void> updateDisplayName(String displayName) async {
+    if (_auth.currentUser != null) {
+      await _auth.currentUser!.updateDisplayName(displayName);
+      await _auth.currentUser!.reload();
+      _user = _auth.currentUser;
+      notifyListeners();
+    }
+  }
 }
