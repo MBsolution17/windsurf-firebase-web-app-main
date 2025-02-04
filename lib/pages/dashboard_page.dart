@@ -10,16 +10,16 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_functions/cloud_functions.dart'; // Pour les fonctions Cloud
-import 'package:audioplayers/audioplayers.dart'; // Pour la lecture audio
+import 'package:cloud_functions/cloud_functions.dart';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:archive/archive.dart';
 import 'package:archive/archive_io.dart';
 import 'package:http/http.dart' as http;
 import 'package:table_calendar/table_calendar.dart';
 import 'package:intl/intl.dart';
-import 'package:flutter/services.dart'; // Pour Clipboard
+import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:shared_preferences/shared_preferences.dart'; // Pour SharedPreferences
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/task.dart';
 import '../models/folder.dart';
@@ -29,10 +29,9 @@ import '../services/ai_service.dart';
 import '../services/web_speech_recognition_service.dart';
 import '../services/auth_service.dart';
 import 'contact_page.dart';
-import 'profile_page.dart'; // **Import de ProfilePage si nécessaire**
-import '../widgets/profile_avatar.dart'; // **Import du widget ProfileAvatar**
+import 'profile_page.dart';
+import '../widgets/profile_avatar.dart';
 
-/// Simple model for the dashboard items
 class DashboardItem {
   final String title;
   final IconData icon;
@@ -48,7 +47,12 @@ class DashboardItem {
 }
 
 class DashboardPage extends StatefulWidget {
-  const DashboardPage({Key? key}) : super(key: key);
+  final String workspaceId;
+
+  const DashboardPage({
+    Key? key,
+    required this.workspaceId,
+  }) : super(key: key);
 
   @override
   _DashboardPageState createState() => _DashboardPageState();
@@ -58,7 +62,6 @@ class _DashboardPageState extends State<DashboardPage>
     with SingleTickerProviderStateMixin {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  // Services IA & Speech
   AIService? _aiService;
   WebSpeechRecognitionService? _speechService;
 
@@ -66,14 +69,11 @@ class _DashboardPageState extends State<DashboardPage>
   final FocusNode _chatFocusNode = FocusNode();
   final ScrollController _scrollController = ScrollController();
 
-  // Gestion de l'écoute micro
   bool _isListening = false;
 
-  // Animation du micro
   late AnimationController _animationController;
   late Animation<double> _animation;
 
-  // Pour les formulaires (ajout contact, etc.)
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
   final TextEditingController _firstNameController = TextEditingController();
   final TextEditingController _lastNameController = TextEditingController();
@@ -83,41 +83,33 @@ class _DashboardPageState extends State<DashboardPage>
   final TextEditingController _companyController = TextEditingController();
   final TextEditingController _externalInfoController = TextEditingController();
 
-  // Folders & Contacts
   String? _selectedFolderId;
   List<Contact> _availableContacts = [];
 
-  // Tâches & Calendrier
   CalendarFormat _calendarFormat = CalendarFormat.month;
   DateTime _focusedDay = DateTime.now();
   DateTime? _selectedDay;
   Map<DateTime, List<Task>> _tasksByDate = {};
 
-  // Chat IA
   String _aiResponse = '';
   String _lastError = '';
 
-  // AudioPlayer (TTS mobile)
   final AudioPlayer _audioPlayer = AudioPlayer();
-  bool _isTtsEnabled = false; // État pour activer/désactiver la lecture vocale
+  bool _isTtsEnabled = false;
 
-  // Voix disponibles (web)
   List<html.SpeechSynthesisVoice> _availableVoices = [];
   html.SpeechSynthesisVoice? _selectedVoice;
-  // Voix mobiles
   String _selectedVoiceName = 'fr-FR-Wavenet-D';
   double _selectedSpeakingRate = 1.0;
-  double _selectedPitch = 1.0; // Pour le web éventuellement
+  double _selectedPitch = 1.0;
 
-  // Clés pour SharedPreferences
   static const String prefSelectedVoiceName = 'selectedVoiceName';
   static const String prefSelectedVoiceId = 'selectedVoiceId';
 
-  // Palette de couleurs
+  // Couleur principale et neutre (charte gris foncé)
   final Color primaryColor = Colors.grey[800]!;
   final Color neutralDark = Colors.grey[800]!;
 
-  // Dashboard Items
   final List<DashboardItem> dashboardItems = [
     DashboardItem(
       title: 'Channels',
@@ -163,30 +155,51 @@ class _DashboardPageState extends State<DashboardPage>
     ),
   ];
 
-  // Mapping action -> route
+  // Utilisation de '/documents' pour les actions relatives aux documents
   final Map<String, String> actionRouteMap = {
-    'create_task': '/task_tracker',
-    'add_contact': '/contact_page',
-    'create_folder_with_document': '/document_page',
-    'create_folder_and_add_contact': '/document_page',
-    'modify_document': '/document_page',
-    // Ajoutez d'autres mappings si nécessaire
-  };
+  'create_task': '/calendar', // Mise à jour ici
+  'add_contact': '/contact_page',
+  'create_folder_with_document': '/documents',
+  'create_folder_and_add_contact': '/documents',
+  'modify_document': '/documents',
+};
+
+  late String workspaceId;
+
+  List<UserModel> _connectedUsers = [];
 
   @override
   void initState() {
     super.initState();
-
+    workspaceId = widget.workspaceId;
     _selectedDay = DateTime.now();
     _focusedDay = DateTime.now();
     _calendarFormat = CalendarFormat.month;
 
-    // Fetch vos données
-    _fetchAllTasks();
+    // Actualisation en temps réel des tâches
+    _firestore
+        .collection('workspaces')
+        .doc(workspaceId)
+        .collection('tasks')
+        .snapshots()
+        .listen((snapshot) {
+      final Map<DateTime, List<Task>> tasksMap = {};
+      for (var doc in snapshot.docs) {
+        Task task = Task.fromFirestore(doc);
+        DateTime date = DateTime(task.dueDate.year, task.dueDate.month, task.dueDate.day);
+        tasksMap[date] = (tasksMap[date] ?? [])..add(task);
+      }
+      if (mounted) {
+        setState(() {
+          _tasksByDate = tasksMap;
+        });
+      }
+    });
+
     _fetchAllFolders();
     _fetchAvailableContacts();
+    _fetchConnectedUsers();
 
-    // Animation micro
     _animationController = AnimationController(
       duration: const Duration(milliseconds: 1000),
       vsync: this,
@@ -195,12 +208,11 @@ class _DashboardPageState extends State<DashboardPage>
       CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
     );
 
-    // Initialise IA & Speech
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       _aiService = Provider.of<AIService>(context, listen: false);
-      _speechService = Provider.of<WebSpeechRecognitionService>(context, listen: false);
+      _speechService =
+          Provider.of<WebSpeechRecognitionService>(context, listen: false);
 
-      // Reconnaissance vocale
       if (_speechService != null) {
         bool available = await _speechService!.initialize();
         if (!available && mounted) {
@@ -210,7 +222,6 @@ class _DashboardPageState extends State<DashboardPage>
         }
       }
 
-      // Voix web
       if (kIsWeb) {
         final synth = html.window.speechSynthesis;
         synth?.addEventListener('voiceschanged', (event) {
@@ -233,12 +244,10 @@ class _DashboardPageState extends State<DashboardPage>
         }
         _loadSavedVoice();
       } else {
-        // Mobile
         _loadSavedVoice();
       }
     });
 
-    // Callbacks de reconnaissance vocale
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_speechService != null) {
         _speechService!.onResult = (transcript) async {
@@ -248,14 +257,10 @@ class _DashboardPageState extends State<DashboardPage>
             _lastError = '';
             _aiResponse = 'En attente de la réponse de l\'IA...';
           });
-          debugPrint('Texte reconnu : $transcript');
-
-          // Envoi au service IA
           try {
             if (_aiService == null) return;
             ChatMessage aiMessage = await _aiService!.sendMessage(transcript);
             String responseContent = aiMessage.content;
-            debugPrint('Réponse de l\'IA : $responseContent');
             if (!mounted) return;
             setState(() {
               _aiResponse = responseContent;
@@ -268,7 +273,6 @@ class _DashboardPageState extends State<DashboardPage>
             setState(() {
               _aiResponse = 'Erreur lors de la communication avec l\'IA.';
             });
-            debugPrint('Erreur lors de l\'envoi du message à l\'IA : $e');
           }
         };
 
@@ -279,19 +283,16 @@ class _DashboardPageState extends State<DashboardPage>
             _isListening = false;
             _aiResponse = '';
           });
-          debugPrint('Erreur de reconnaissance vocale : $error');
         };
       }
     });
 
-    // Focus
     _chatFocusNode.addListener(() {
       if (!_chatFocusNode.hasFocus && _isListening) {
         _toggleAssistantListening();
       }
     });
 
-    // Écoute des messages validés
     _listenToValidatedMessages();
   }
 
@@ -306,41 +307,68 @@ class _DashboardPageState extends State<DashboardPage>
     super.dispose();
   }
 
-  // ---------------------------------------------------------------------------
-  // FETCH DATA (Firestore) - À adapter selon votre logique
-  // ---------------------------------------------------------------------------
-  void _fetchAllTasks() {
-    // TODO: Votre logique Firestore pour récupérer les tâches, puis remplir _tasksByDate
+  void _fetchAllFolders() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    await _firestore
+        .collection('workspaces')
+        .doc(workspaceId)
+        .collection('folders')
+        .get();
   }
 
-  void _fetchAllFolders() {
-    // TODO: Votre logique Firestore pour récupérer les dossiers
+  void _fetchAvailableContacts() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    QuerySnapshot snapshot = await _firestore
+        .collection('workspaces')
+        .doc(workspaceId)
+        .collection('contacts')
+        .get();
+    final contacts = snapshot.docs.map((doc) => Contact.fromFirestore(doc)).toList();
+    setState(() {
+      _availableContacts = contacts;
+    });
   }
 
-  void _fetchAvailableContacts() {
-    // TODO: Votre logique Firestore pour récupérer les contacts
-  }
-
-  // ---------------------------------------------------------------------------
-  // ÉCOUTE DES MESSAGES VALIDÉS
-  // ---------------------------------------------------------------------------
-  void _listenToValidatedMessages() {
+  void _fetchConnectedUsers() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
     _firestore
+        .collection('workspaces')
+        .doc(workspaceId)
+        .collection('users')
+        .where('isOnline', isEqualTo: true)
+        .snapshots()
+        .listen((snapshot) {
+      setState(() {
+        _connectedUsers =
+            snapshot.docs.map((doc) => UserModel.fromFirestore(doc)).toList();
+      });
+    });
+  }
+
+  void _listenToValidatedMessages() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    _firestore
+        .collection('workspaces')
+        .doc(workspaceId)
         .collection('chat_messages')
         .where('status', isEqualTo: 'validated')
+        .where('executed', isEqualTo: false)
         .snapshots()
         .listen((snapshot) {
       for (var doc in snapshot.docs) {
         ChatMessage message = ChatMessage.fromFirestore(doc);
-        // Exécuter les actions du JSON
         _executeActionsFromMessage(message);
+        doc.reference.update({'executed': true});
       }
     });
   }
 
   void _executeActionsFromMessage(ChatMessage message) {
     if (!isJson(message.content)) return;
-
     final dynamic data = jsonDecode(message.content);
     List<Map<String, dynamic>> actions = [];
     if (data is List) {
@@ -348,75 +376,61 @@ class _DashboardPageState extends State<DashboardPage>
     } else if (data is Map<String, dynamic>) {
       actions = [data];
     }
-
     for (var actionData in actions) {
       _executeAction(actionData);
     }
   }
 
   void _executeAction(Map<String, dynamic> actionData) {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
     String action = actionData['action'] ?? '';
     Map<String, dynamic> data = actionData['data'] ?? {};
-
-    debugPrint('Exécution de l\'action: $action, data=$data');
     switch (action) {
       case 'create_folder_and_add_contact':
         _createFolderAndAddContact(data);
         break;
-
       case 'create_task':
         _createTask(data);
         break;
-
       case 'add_contact':
         _addContact(data);
         break;
-
       default:
-        debugPrint('Action inconnue: $action');
+        break;
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // MÉTHODES QUI FONT VRAIMENT LES INSERTIONS FIRESTORE
-  // ---------------------------------------------------------------------------
-
-  /// Exemple de création de tâche dans la collection "tasks"
   Future<void> _createTask(Map<String, dynamic> data) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
     String title = data['title'] ?? '';
     String description = data['description'] ?? '';
     String dueDateStr = data['dueDate'] ?? '';
     String priority = data['priority'] ?? 'Medium';
-
-    debugPrint(
-      'Création de la tâche "$title", desc="$description", '
-      'date="$dueDateStr", prio=$priority ...'
-    );
-
-    // Parse la date si besoin
     DateTime parsedDate;
     try {
       parsedDate = DateTime.parse(dueDateStr);
     } catch (_) {
-      // En cas de parsing impossible, met une date par défaut
       parsedDate = DateTime.now().add(const Duration(days: 1));
     }
-
-    // Insère dans Firestore
-    await _firestore.collection('tasks').add({
+    await _firestore
+        .collection('workspaces')
+        .doc(workspaceId)
+        .collection('tasks')
+        .add({
       'title': title,
       'description': description,
       'dueDate': parsedDate,
       'priority': priority,
       'createdAt': FieldValue.serverTimestamp(),
-      'status': 'Pending', // ou tout autre champ
+      'status': 'Pending',
     });
-
-    debugPrint('Tâche "$title" insérée dans la collection "tasks" !');
   }
 
-  /// Exemple de création de contact dans la collection "contacts"
   Future<void> _addContact(Map<String, dynamic> data) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
     String firstName = data['firstName'] ?? '';
     String lastName = data['lastName'] ?? '';
     String email = data['email'] ?? '';
@@ -424,12 +438,11 @@ class _DashboardPageState extends State<DashboardPage>
     String address = data['address'] ?? '';
     String company = data['company'] ?? '';
     String externalInfo = data['externalInfo'] ?? '';
-
-    debugPrint(
-      'Création d\'un contact "$firstName $lastName", phone="$phone", email="$email"...'
-    );
-
-    await _firestore.collection('contacts').add({
+    await _firestore
+        .collection('workspaces')
+        .doc(workspaceId)
+        .collection('contacts')
+        .add({
       'firstName': firstName,
       'lastName': lastName,
       'email': email,
@@ -439,25 +452,21 @@ class _DashboardPageState extends State<DashboardPage>
       'externalInfo': externalInfo,
       'createdAt': FieldValue.serverTimestamp(),
     });
-
-    debugPrint('Contact "$firstName $lastName" inséré dans la collection "contacts" !');
   }
 
-  /// Exemple de création d'un dossier + contact
   Future<void> _createFolderAndAddContact(Map<String, dynamic> data) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
     String folderName = data['folderName'] ?? '';
     Map<String, dynamic> contactData = data['contact'] ?? {};
-
-    debugPrint('Création du dossier "$folderName" + contact $contactData ...');
-
-    // 1) Crée le dossier dans "folders"
-    final folderRef = await _firestore.collection('folders').add({
+    final folderRef = await _firestore
+        .collection('workspaces')
+        .doc(workspaceId)
+        .collection('folders')
+        .add({
       'folderName': folderName,
       'createdAt': FieldValue.serverTimestamp(),
     });
-    debugPrint('Dossier "$folderName" inséré dans la collection "folders".');
-
-    // 2) Puis crée le contact (dans la collection globale "contacts")
     String firstName = contactData['firstName'] ?? '';
     String lastName = contactData['lastName'] ?? '';
     String email = contactData['email'] ?? '';
@@ -465,8 +474,11 @@ class _DashboardPageState extends State<DashboardPage>
     String address = contactData['address'] ?? '';
     String company = contactData['company'] ?? '';
     String externalInfo = contactData['externalInfo'] ?? '';
-
-    await _firestore.collection('contacts').add({
+    await _firestore
+        .collection('workspaces')
+        .doc(workspaceId)
+        .collection('contacts')
+        .add({
       'firstName': firstName,
       'lastName': lastName,
       'email': email,
@@ -474,18 +486,11 @@ class _DashboardPageState extends State<DashboardPage>
       'address': address,
       'company': company,
       'externalInfo': externalInfo,
-      'folderId': folderRef.id, // on associe le contact au folder
+      'folderId': folderRef.id,
       'createdAt': FieldValue.serverTimestamp(),
     });
-
-    debugPrint(
-      'Contact "$firstName $lastName" ajouté et lié au folderId=${folderRef.id} !'
-    );
   }
 
-  // ---------------------------------------------------------------------------
-  // VOIX (TTS)
-  // ---------------------------------------------------------------------------
   void _loadSavedVoice() async {
     final prefs = await SharedPreferences.getInstance();
     if (kIsWeb) {
@@ -514,7 +519,6 @@ class _DashboardPageState extends State<DashboardPage>
         }
       }
     } else {
-      // Mobile
       String? savedVoiceName = prefs.getString(prefSelectedVoiceName);
       if (savedVoiceName != null && mounted) {
         setState(() {
@@ -538,14 +542,12 @@ class _DashboardPageState extends State<DashboardPage>
   Future<void> _speak(String text) async {
     if (!_isTtsEnabled) return;
     String textToSpeak = isJson(text) ? jsonToSentence(text) : text;
-    debugPrint('Texte à lire : $textToSpeak');
-
     if (kIsWeb) {
       _speakWeb(textToSpeak);
     } else {
-      // Mobile : via Cloud Functions
       try {
-        HttpsCallable callable = FirebaseFunctions.instance.httpsCallable('synthesizeSpeech');
+        HttpsCallable callable =
+            FirebaseFunctions.instance.httpsCallable('synthesizeSpeech');
         final results = await callable.call(<String, dynamic>{
           'text': textToSpeak,
           'languageCode': 'fr-FR',
@@ -556,7 +558,6 @@ class _DashboardPageState extends State<DashboardPage>
         Uint8List audioBytes = base64Decode(audioBase64);
         await _audioPlayer.play(BytesSource(audioBytes));
       } catch (e) {
-        debugPrint('Erreur synthèse vocale: $e');
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Erreur lors de la synthèse vocale.')),
@@ -587,9 +588,6 @@ class _DashboardPageState extends State<DashboardPage>
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // METHODE POUR OUVRIR LES PARAMÈTRES DE VOIX
-  // ---------------------------------------------------------------------------
   void _openVoiceSettings() {
     showDialog(
       context: context,
@@ -600,7 +598,6 @@ class _DashboardPageState extends State<DashboardPage>
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Si on est sur le Web, on liste les voix `html.SpeechSynthesisVoice`
                 if (kIsWeb) ...[
                   DropdownButton<html.SpeechSynthesisVoice>(
                     value: _selectedVoice,
@@ -620,9 +617,7 @@ class _DashboardPageState extends State<DashboardPage>
                     },
                   ),
                   const SizedBox(height: 20),
-                ]
-                // Sinon, sur mobile, on propose un Dropdown "maison"
-                else ...[
+                ] else ...[
                   DropdownButtonFormField<String>(
                     value: _selectedVoiceName.isNotEmpty ? _selectedVoiceName : null,
                     decoration: const InputDecoration(
@@ -648,7 +643,6 @@ class _DashboardPageState extends State<DashboardPage>
                   ),
                   const SizedBox(height: 20),
                 ],
-                // Slider de vitesse
                 Row(
                   children: [
                     const Text('Vitesse:'),
@@ -671,7 +665,6 @@ class _DashboardPageState extends State<DashboardPage>
                   ],
                 ),
                 const SizedBox(height: 20),
-                // Slider de pitch si on est sur le Web
                 if (kIsWeb) ...[
                   Row(
                     children: [
@@ -696,7 +689,6 @@ class _DashboardPageState extends State<DashboardPage>
                   ),
                   const SizedBox(height: 20),
                 ],
-                // Bouton d'écoute d'exemple
                 ElevatedButton(
                   onPressed: () async {
                     const sampleText = 'Bonjour, ceci est un exemple de voix.';
@@ -728,9 +720,6 @@ class _DashboardPageState extends State<DashboardPage>
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // RECONNAISSANCE VOCALE
-  // ---------------------------------------------------------------------------
   void _toggleAssistantListening() {
     if (_speechService == null) return;
     if (_isListening) {
@@ -753,9 +742,6 @@ class _DashboardPageState extends State<DashboardPage>
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // ENVOI MESSAGE À L'IA
-  // ---------------------------------------------------------------------------
   Future<void> _sendMessage(String message) async {
     if (_aiService == null) return;
     try {
@@ -766,7 +752,6 @@ class _DashboardPageState extends State<DashboardPage>
         _chatController.clear();
         _aiResponse = aiResponse;
       });
-
       if (_isTtsEnabled) {
         await _speak(aiResponse);
       }
@@ -775,13 +760,9 @@ class _DashboardPageState extends State<DashboardPage>
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Erreur lors de l\'envoi du message: $e')),
       );
-      debugPrint('Erreur lors de l\'envoi du message: $e');
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // TÂCHES
-  // ---------------------------------------------------------------------------
   Color _getStatusColor(TaskStatus status) {
     switch (status) {
       case TaskStatus.Pending:
@@ -806,11 +787,11 @@ class _DashboardPageState extends State<DashboardPage>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text('Description: ${task.description}'),
-                const SizedBox(height: 8),
+                const SizedBox(height: 6),
                 Text('Date d\'échéance: ${DateFormat('dd/MM/yyyy').format(task.dueDate)}'),
-                const SizedBox(height: 8),
+                const SizedBox(height: 6),
                 Text('Priorité: ${task.priority.toString().split('.').last}'),
-                const SizedBox(height: 8),
+                const SizedBox(height: 6),
                 Text('Statut: ${task.status.toString().split('.').last}'),
               ],
             ),
@@ -827,198 +808,154 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   Widget _buildUpcomingTasksSection() {
-    // Extrait 5 tâches
     List<Task> upcomingTasks = _tasksByDate.values
         .expand((tasks) => tasks)
         .where((task) =>
             task.dueDate.isAfter(DateTime.now()) &&
             task.status != TaskStatus.Done)
         .toList();
-
     upcomingTasks.sort((a, b) => a.dueDate.compareTo(b.dueDate));
-    upcomingTasks = upcomingTasks.take(5).toList();
+    upcomingTasks = upcomingTasks.take(20).toList();
 
     return Card(
       elevation: 4,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
+      clipBehavior: Clip.hardEdge,
       color: Colors.white,
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
+      child: Container(
+        height: 300,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Titre
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'Tâches à Venir',
-                  style: GoogleFonts.roboto(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: neutralDark,
-                  ),
-                ),
-                TextButton(
-                  onPressed: () {
-                    Navigator.pushNamed(context, '/task_tracker');
-                  },
-                  style: TextButton.styleFrom(
-                    foregroundColor: primaryColor,
-                  ),
-                  child: const Text('Voir Tout'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            if (upcomingTasks.isEmpty)
-              Center(
-                child: Text(
-                  'Aucune tâche à venir',
-                  style: GoogleFonts.roboto(
-                    fontSize: 16,
-                    color: Colors.grey[600],
-                  ),
-                ),
-              )
-            else
-              Column(
+            // Header
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  // Première tâche
-                  Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: Colors.grey[300]!),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.grey.withOpacity(0.1),
-                          spreadRadius: 2,
-                          blurRadius: 5,
-                          offset: const Offset(0, 3),
-                        ),
-                      ],
-                    ),
-                    padding: const EdgeInsets.all(12),
-                    margin: const EdgeInsets.only(bottom: 12),
-                    child: Row(
-                      children: [
-                        Icon(Icons.star, color: primaryColor),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Prochaine Tâche',
-                                style: GoogleFonts.roboto(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                  color: neutralDark,
-                                ),
-                              ),
-                              Text(
-                                upcomingTasks.first.title,
-                                style: GoogleFonts.roboto(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                  color: neutralDark,
-                                ),
-                              ),
-                              const SizedBox(height: 5),
-                              Text(
-                                'À faire le ${DateFormat('dd/MM/yyyy').format(upcomingTasks.first.dueDate)}',
-                                style: GoogleFonts.roboto(
-                                  fontSize: 14,
-                                  color: Colors.grey[600],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: _getStatusColor(upcomingTasks.first.status),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text(
-                            upcomingTasks.first.status
-                                .toString()
-                                .split('.')
-                                .last,
-                            style: GoogleFonts.roboto(
-                              color: Colors.white,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ),
-                      ],
+                  Text(
+                    'Tâches à Venir',
+                    style: GoogleFonts.roboto(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey[800],
                     ),
                   ),
-                  // Les autres tâches
-                  SizedBox(
-                    height: 150,
-                    child: ListView.builder(
-                      shrinkWrap: true,
-                      itemCount: (upcomingTasks.length > 1)
-                          ? upcomingTasks.length - 1
-                          : 0,
-                      itemBuilder: (context, index) {
-                        final task = upcomingTasks[index + 1];
-                        return ListTile(
-                          title: Text(
-                            task.title,
-                            style: GoogleFonts.roboto(
-                              fontWeight: FontWeight.w600,
-                              color: neutralDark,
-                            ),
-                          ),
-                          subtitle: Text(
-                            '${DateFormat('dd MMM yyyy').format(task.dueDate)} - ${task.priority.toString().split('.').last}',
-                            style: GoogleFonts.roboto(
-                              color: Colors.grey[600],
-                            ),
-                          ),
-                          trailing: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: _getStatusColor(task.status),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Text(
-                              task.status.toString().split('.').last,
-                              style: GoogleFonts.roboto(
-                                color: Colors.white,
-                                fontSize: 12,
-                              ),
-                            ),
-                          ),
-                          onTap: () => _showTaskDetailsDialog(task),
-                        );
-                      },
-                    ),
-                  ),
+                 TextButton(
+  onPressed: () {
+    Navigator.pushNamed(context, '/calendar',
+        arguments: {'workspaceId': workspaceId});
+  },
+  style: TextButton.styleFrom(
+    foregroundColor: Colors.grey[700],
+  ),
+  child: const Text('Voir Tout'),
+),
                 ],
               ),
+            ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: ListView.builder(
+                  padding: EdgeInsets.zero,
+                  itemCount: upcomingTasks.length,
+                  itemBuilder: (context, index) {
+                    final task = upcomingTasks[index];
+                    return Card(
+                      color: const Color.fromARGB(255, 210, 210, 210),
+                      elevation: 2,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
+                      child: Container(
+                        padding: const EdgeInsets.all(8),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              task.title,
+                              style: GoogleFonts.roboto(
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.grey[900],
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              task.description,
+                              style: GoogleFonts.roboto(
+                                fontSize: 12,
+                                color: Colors.grey[800],
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 2),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  'À faire le ${DateFormat('dd/MM/yyyy').format(task.dueDate)}',
+                                  style: GoogleFonts.roboto(
+                                    fontSize: 12,
+                                    color: Colors.grey[800],
+                                  ),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: _getStatusColor(task.status),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Text(
+                                    task.status.toString().split('.').last,
+                                    style: GoogleFonts.roboto(
+                                      color: Colors.grey[900],
+                                      fontSize: 10,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+                            Align(
+                              alignment: Alignment.bottomRight,
+                              child: ElevatedButton(
+                                onPressed: () => _showTaskDetailsDialog(task),
+                                style: ElevatedButton.styleFrom(
+                                  minimumSize: const Size(60, 25),
+                                  backgroundColor: Colors.grey[800],
+                                  foregroundColor: Colors.white,
+                                  textStyle: const TextStyle(fontSize: 12),
+                                ),
+                                child: const Text('Détails'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
           ],
         ),
       ),
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // GESTION DU JSON (IA)
-  // ---------------------------------------------------------------------------
   bool isJson(String text) {
     try {
       final decoded = jsonDecode(text);
       return (decoded is Map<String, dynamic> || decoded is List<dynamic>);
-    } catch (e) {
-      debugPrint('Erreur de parsing JSON: $e');
-      debugPrint('Contenu JSON reçu: $text');
+    } catch (_) {
       return false;
     }
   }
@@ -1026,7 +963,6 @@ class _DashboardPageState extends State<DashboardPage>
   String jsonToSentence(String jsonString) {
     try {
       final dynamic data = jsonDecode(jsonString);
-
       if (data is List) {
         return data
             .map((element) => element is Map<String, dynamic>
@@ -1038,8 +974,7 @@ class _DashboardPageState extends State<DashboardPage>
       } else {
         return 'Contenu JSON invalide.';
       }
-    } catch (e) {
-      debugPrint('Erreur lors de la conversion JSON en phrase : $e');
+    } catch (_) {
       return 'Contenu JSON invalide.';
     }
   }
@@ -1047,33 +982,29 @@ class _DashboardPageState extends State<DashboardPage>
   String _convertSingleActionToSentence(Map<String, dynamic> jsonData) {
     final String action = jsonData['action'] ?? 'Unknown Action';
     final Map<String, dynamic> data = jsonData['data'] ?? {};
-
     switch (action) {
       case 'create_task':
         String title = data['title'] ?? 'Sans Titre';
         String description = data['description'] ?? 'Aucune Description';
         String dueDate = data['dueDate'] ?? 'Date non spécifiée';
         String priority = data['priority'] ?? 'Moyenne';
-        // On parse la date si possible
         DateTime? parsedDate;
         try {
           parsedDate = DateTime.parse(dueDate);
         } catch (_) {}
-        String dateFormatee =
-            parsedDate != null ? DateFormat('dd/MM/yyyy').format(parsedDate) : dueDate;
-        return 'Nouvelle tâche: "$title" (priorité $priority), décrite comme "$description", à réaliser d\'ici le $dateFormatee.';
-
+        String dateFormatee = parsedDate != null
+            ? DateFormat('dd/MM/yyyy').format(parsedDate)
+            : dueDate;
+        return 'Nouvelle tâche: "$title" (priorité $priority), "$description", à faire le $dateFormatee.';
       case 'add_contact':
         String firstName = data['firstName'] ?? '';
         String lastName = data['lastName'] ?? '';
         String phone = data['phone'] ?? '';
-        return 'Nouveau contact ajouté : $firstName $lastName (tél: $phone).';
-
+        return 'Nouveau contact: $firstName $lastName (tél: $phone).';
       case 'create_folder_with_document':
         String folderName = data['folderName'] ?? 'Sans Nom';
         String docTitle = data['document']?['title'] ?? 'Sans Titre';
         return 'Dossier "$folderName" créé avec le document "$docTitle".';
-
       case 'create_folder_and_add_contact':
         final folderName = data['folderName'] ?? 'Sans Nom';
         final contactData = data['contact'] ?? {};
@@ -1081,12 +1012,10 @@ class _DashboardPageState extends State<DashboardPage>
         String cLast = contactData['lastName'] ?? '';
         String cPhone = contactData['phone'] ?? '';
         return 'Dossier "$folderName" créé, contact: $cFirst $cLast (tél: $cPhone).';
-
       case 'modify_document':
         final folderName2 = data['folderName'] ?? 'Sans Nom';
         final docName = data['documentName'] ?? 'Document';
-        return 'Le document "$docName" dans le dossier "$folderName2" va être modifié.';
-
+        return 'Modification du document "$docName" dans le dossier "$folderName2".';
       default:
         return 'Action inconnue : $action.';
     }
@@ -1094,7 +1023,6 @@ class _DashboardPageState extends State<DashboardPage>
 
   Widget buildSentenceResponseUI(String jsonString) {
     String sentence = jsonToSentence(jsonString);
-
     try {
       final dynamic data = jsonDecode(jsonString);
       List<Map<String, dynamic>> actions = [];
@@ -1102,17 +1030,13 @@ class _DashboardPageState extends State<DashboardPage>
         actions = data.whereType<Map<String, dynamic>>().toList();
       } else if (data is Map<String, dynamic>) {
         actions = [data];
-      } else {
-        throw FormatException('Structure JSON inattendue');
       }
-
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: actions.map((actionData) {
           final action = actionData['action'] ?? '';
           final routeName = actionRouteMap[action] ?? '';
           final actionSentence = _convertSingleActionToSentence(actionData);
-
           if (routeName.isNotEmpty) {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1127,7 +1051,8 @@ class _DashboardPageState extends State<DashboardPage>
                 const SizedBox(height: 8),
                 ElevatedButton.icon(
                   onPressed: () {
-                    Navigator.pushNamed(context, routeName);
+                    Navigator.pushNamed(context, routeName,
+                        arguments: {'workspaceId': workspaceId});
                   },
                   icon: const Icon(Icons.arrow_forward, size: 16),
                   label: Text(
@@ -1157,8 +1082,7 @@ class _DashboardPageState extends State<DashboardPage>
           }
         }).toList(),
       );
-    } catch (e) {
-      debugPrint('Erreur lors de la conversion JSON en phrase : $e');
+    } catch (_) {
       return SelectableText(
         'Impossible de parser le JSON : $sentence',
         style: GoogleFonts.roboto(
@@ -1169,15 +1093,10 @@ class _DashboardPageState extends State<DashboardPage>
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // CHAT IA
-  // ---------------------------------------------------------------------------
   Widget _buildChatAssistantSection() {
-    // Si _aiService n'est pas encore initialisé
     if (_aiService == null) {
       return const Center(child: CircularProgressIndicator());
     }
-
     return Card(
       elevation: 4,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -1196,7 +1115,7 @@ class _DashboardPageState extends State<DashboardPage>
               ),
             ),
             const SizedBox(height: 10),
-            Expanded(
+            Flexible(
               child: StreamBuilder<List<ChatMessage>>(
                 stream: _aiService!.getChatHistory(),
                 builder: (context, snapshot) {
@@ -1222,9 +1141,7 @@ class _DashboardPageState extends State<DashboardPage>
                       ),
                     );
                   }
-
                   final chat_messages = snapshot.data!;
-                  // Auto-scroll
                   WidgetsBinding.instance.addPostFrameCallback((_) {
                     if (_scrollController.hasClients) {
                       _scrollController.animateTo(
@@ -1234,7 +1151,6 @@ class _DashboardPageState extends State<DashboardPage>
                       );
                     }
                   });
-
                   return ListView.builder(
                     reverse: true,
                     controller: _scrollController,
@@ -1242,7 +1158,6 @@ class _DashboardPageState extends State<DashboardPage>
                     itemBuilder: (context, index) {
                       final message = chat_messages[index];
                       bool isUser = message.type == MessageType.user;
-
                       return Align(
                         alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
                         child: Container(
@@ -1253,30 +1168,11 @@ class _DashboardPageState extends State<DashboardPage>
                             borderRadius: BorderRadius.circular(15),
                           ),
                           child: Column(
-                            crossAxisAlignment:
-                                isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                            crossAxisAlignment: isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                             children: [
-                              // Affichage du contenu
+                              // Si le message n'est pas de l'utilisateur et est au format JSON, on affiche la réponse formatée
                               if (!isUser && isJson(message.content))
                                 buildSentenceResponseUI(message.content)
-                              else if (!isUser && !isJson(message.content))
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    SelectableText(
-                                      message.content,
-                                      style: GoogleFonts.roboto(
-                                        color: Colors.black87,
-                                        fontSize: 14,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    const Text(
-                                      'Ce message ne peut pas être modifié car il n\'est pas au format JSON.',
-                                      style: TextStyle(color: Colors.red, fontSize: 12),
-                                    ),
-                                  ],
-                                )
                               else
                                 SelectableText(
                                   message.content,
@@ -1285,28 +1181,33 @@ class _DashboardPageState extends State<DashboardPage>
                                     fontSize: 14,
                                   ),
                                 ),
-
                               const SizedBox(height: 4),
-                              Text(
-                                'Statut: ${message.status.toString().split('.').last}',
-                                style: const TextStyle(fontSize: 12, color: Colors.black54),
-                              ),
+                              // N'affichez pas le statut si c'est "pending_validation" ou "validated"
+                              if (!(message.status == MessageStatus.pending_validation ||
+                                  message.status == MessageStatus.validated))
+                                Text(
+                                  'Statut: ${message.status.toString().split('.').last}',
+                                  style: const TextStyle(fontSize: 12, color: Colors.black54),
+                                ),
+                              // Affichage des boutons uniquement si le message est de type IA, en pending_validation et le contenu est au format JSON
                               if (message.type == MessageType.ai &&
-                                  message.status == MessageStatus.pending_validation)
+                                  message.status == MessageStatus.pending_validation &&
+                                  isJson(message.content))
                                 Row(
                                   mainAxisAlignment: MainAxisAlignment.start,
                                   children: [
                                     ElevatedButton(
                                       onPressed: () {
-                                        // Valider MANUELLEMENT
                                         _aiService!.handleValidation(
                                           message.id,
                                           MessageStatus.validated,
                                         );
                                       },
                                       style: ElevatedButton.styleFrom(
+                                        minimumSize: const Size(100, 40),
                                         backgroundColor: Colors.grey[300],
                                         foregroundColor: Colors.black54,
+                                        textStyle: const TextStyle(fontSize: 16),
                                       ),
                                       child: const Text('Valider'),
                                     ),
@@ -1333,7 +1234,6 @@ class _DashboardPageState extends State<DashboardPage>
               ),
             ),
             const SizedBox(height: 10),
-            // Zone de saisie
             Row(
               children: [
                 Expanded(
@@ -1348,10 +1248,7 @@ class _DashboardPageState extends State<DashboardPage>
                         borderRadius: BorderRadius.circular(20),
                         borderSide: BorderSide(color: Colors.grey[400]!),
                       ),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 12.0,
-                        vertical: 16.0,
-                      ),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 16.0),
                     ),
                     style: const TextStyle(color: Colors.black87),
                     onSubmitted: (value) async {
@@ -1362,7 +1259,6 @@ class _DashboardPageState extends State<DashboardPage>
                   ),
                 ),
                 const SizedBox(width: 8),
-                // Micro
                 GestureDetector(
                   onTap: _toggleAssistantListening,
                   child: ScaleTransition(
@@ -1377,15 +1273,12 @@ class _DashboardPageState extends State<DashboardPage>
                   ),
                 ),
                 const SizedBox(width: 8),
-                // Lecture vocale On/Off
                 IconButton(
                   icon: Icon(
                     _isTtsEnabled ? Icons.headset : Icons.headset_off,
                     color: _isTtsEnabled ? Colors.blueAccent : Colors.grey,
                   ),
-                  tooltip: _isTtsEnabled
-                      ? 'Désactiver la lecture vocale'
-                      : 'Activer la lecture vocale',
+                  tooltip: _isTtsEnabled ? 'Désactiver la lecture vocale' : 'Activer la lecture vocale',
                   onPressed: () {
                     if (!mounted) return;
                     setState(() {
@@ -1393,24 +1286,18 @@ class _DashboardPageState extends State<DashboardPage>
                     });
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
-                        content: Text(
-                          _isTtsEnabled
-                              ? 'Lecture vocale activée'
-                              : 'Lecture vocale désactivée',
-                        ),
+                        content: Text(_isTtsEnabled ? 'Lecture vocale activée' : 'Lecture vocale désactivée'),
                       ),
                     );
                   },
                 ),
                 const SizedBox(width: 8),
-                // Paramètres de voix
                 IconButton(
                   icon: Icon(Icons.settings_voice, color: Colors.blueGrey[800]),
                   tooltip: 'Paramètres de Voix',
                   onPressed: _openVoiceSettings,
                 ),
                 const SizedBox(width: 8),
-                // Bouton envoi
                 CircleAvatar(
                   backgroundColor: Colors.grey[400],
                   child: IconButton(
@@ -1439,9 +1326,6 @@ class _DashboardPageState extends State<DashboardPage>
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // ÉDITION DES MESSAGES (JSON LIST)
-  // ---------------------------------------------------------------------------
   void _showEditMessageDialog(ChatMessage message, {bool isAIMessage = false}) {
     if (!isJson(message.content)) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1449,22 +1333,18 @@ class _DashboardPageState extends State<DashboardPage>
       );
       return;
     }
-
-    // Parser le JSON (objet ou liste)
     dynamic raw;
     try {
       raw = jsonDecode(message.content);
-    } catch (e) {
+    } catch (_) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Impossible de parser le JSON.')),
       );
       return;
     }
-
-    // On convertit tout en liste d'actions
-    late List<Map<String, dynamic>> items;
+    List<Map<String, dynamic>> items;
     if (raw is List) {
-      items = raw.map((e) => e as Map<String, dynamic>).toList();
+      items = raw.cast<Map<String, dynamic>>();
     } else if (raw is Map<String, dynamic>) {
       items = [raw];
     } else {
@@ -1473,7 +1353,51 @@ class _DashboardPageState extends State<DashboardPage>
       );
       return;
     }
-
+    final List<Map<String, TextEditingController>> controllersList = [];
+    for (int i = 0; i < items.length; i++) {
+      final action = items[i]['action'] ?? '';
+      final data = items[i]['data'] ?? <String, dynamic>{};
+      final Map<String, TextEditingController> ctrlMap = {};
+      switch (action) {
+        case 'create_task':
+          ctrlMap['title'] = TextEditingController(text: data['title'] ?? '');
+          ctrlMap['description'] = TextEditingController(text: data['description'] ?? '');
+          ctrlMap['dueDate'] = TextEditingController(text: data['dueDate'] ?? '');
+          ctrlMap['priority'] = TextEditingController(text: data['priority'] ?? 'Low');
+          break;
+        case 'create_folder_with_document':
+          ctrlMap['folderName'] = TextEditingController(text: data['folderName'] ?? '');
+          final doc = data['document'] ?? {};
+          ctrlMap['docTitle'] = TextEditingController(text: doc['title'] ?? '');
+          ctrlMap['docContent'] = TextEditingController(text: doc['content'] ?? '');
+          break;
+        case 'add_contact':
+          ctrlMap['firstName'] = TextEditingController(text: data['firstName'] ?? '');
+          ctrlMap['lastName'] = TextEditingController(text: data['lastName'] ?? '');
+          ctrlMap['email'] = TextEditingController(text: data['email'] ?? '');
+          ctrlMap['phone'] = TextEditingController(text: data['phone'] ?? '');
+          ctrlMap['address'] = TextEditingController(text: data['address'] ?? '');
+          ctrlMap['company'] = TextEditingController(text: data['company'] ?? '');
+          ctrlMap['externalInfo'] = TextEditingController(text: data['externalInfo'] ?? '');
+          break;
+        case 'create_folder_and_add_contact':
+          ctrlMap['folderName'] = TextEditingController(text: data['folderName'] ?? '');
+          final contact = data['contact'] ?? {};
+          ctrlMap['firstName'] = TextEditingController(text: contact['firstName'] ?? '');
+          ctrlMap['lastName'] = TextEditingController(text: contact['lastName'] ?? '');
+          ctrlMap['email'] = TextEditingController(text: contact['email'] ?? '');
+          ctrlMap['phone'] = TextEditingController(text: contact['phone'] ?? '');
+          ctrlMap['address'] = TextEditingController(text: contact['address'] ?? '');
+          ctrlMap['company'] = TextEditingController(text: contact['company'] ?? '');
+          ctrlMap['externalInfo'] = TextEditingController(text: contact['externalInfo'] ?? '');
+          break;
+        case 'modify_document':
+          ctrlMap['folderName'] = TextEditingController(text: data['folderName'] ?? '');
+          ctrlMap['documentName'] = TextEditingController(text: data['documentName'] ?? '');
+          break;
+      }
+      controllersList.add(ctrlMap);
+    }
     showDialog(
       context: context,
       builder: (context) {
@@ -1482,16 +1406,19 @@ class _DashboardPageState extends State<DashboardPage>
             return AlertDialog(
               title: const Text('Modifier le message'),
               content: SingleChildScrollView(
-                child: Form(
-                  key: _formKey,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // Pour chaque action, on affiche un panneau d'édition
-                      for (int i = 0; i < items.length; i++)
-                        _buildActionEditor(items, i, setState2),
-                    ],
-                  ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (int i = 0; i < items.length; i++)
+                      _buildActionEditor(
+                        items: items,
+                        index: i,
+                        controllersMap: controllersList[i],
+                        onFieldChanged: () {
+                          setState2(() {});
+                        },
+                      ),
+                  ],
                 ),
               ),
               actions: [
@@ -1502,114 +1429,87 @@ class _DashboardPageState extends State<DashboardPage>
                 ElevatedButton(
                   child: const Text('Valider'),
                   onPressed: () async {
-                    // Validation de chaque action
-                    bool allValid = true;
-                    String errorMessage = '';
-
                     for (int i = 0; i < items.length; i++) {
-                      final item = items[i];
-                      String action = item['action'] ?? '';
-                      final data = item['data'] ?? {};
-
+                      final action = items[i]['action'] ?? '';
+                      final data = items[i]['data'] ?? <String, dynamic>{};
+                      final ctrlMap = controllersList[i];
                       switch (action) {
                         case 'create_task':
-                          if ((data['title'] ?? '').isEmpty ||
-                              (data['description'] ?? '').isEmpty ||
-                              (data['dueDate'] ?? '').isEmpty ||
-                              (data['priority'] ?? '').isEmpty) {
-                            allValid = false;
-                            errorMessage = 'Tous les champs de la tâche sont requis.';
-                          }
+                          data['title'] = ctrlMap['title']?.text ?? '';
+                          data['description'] = ctrlMap['description']?.text ?? '';
+                          data['dueDate'] = ctrlMap['dueDate']?.text ?? '';
+                          data['priority'] = ctrlMap['priority']?.text ?? 'Low';
                           break;
                         case 'create_folder_with_document':
-                          if ((data['folderName'] ?? '').isEmpty ||
-                              ((data['document']?['title']) ?? '').isEmpty ||
-                              ((data['document']?['content']) ?? '').isEmpty) {
-                            allValid = false;
-                            errorMessage =
-                                'Veuillez remplir tous les champs (dossier + document).';
-                          }
+                          data['folderName'] = ctrlMap['folderName']?.text ?? '';
+                          final doc = data['document'] ?? {};
+                          doc['title'] = ctrlMap['docTitle']?.text ?? '';
+                          doc['content'] = ctrlMap['docContent']?.text ?? '';
+                          data['document'] = doc;
                           break;
                         case 'add_contact':
-                          if ((data['firstName'] ?? '').isEmpty ||
-                              (data['lastName'] ?? '').isEmpty ||
-                              (data['email'] ?? '').isEmpty ||
-                              (data['phone'] ?? '').isEmpty ||
-                              (data['address'] ?? '').isEmpty ||
-                              (data['company'] ?? '').isEmpty ||
-                              (data['externalInfo'] ?? '').isEmpty) {
-                            allValid = false;
-                            errorMessage = 'Tous les champs du contact sont requis.';
-                          }
+                          data['firstName'] = ctrlMap['firstName']?.text ?? '';
+                          data['lastName'] = ctrlMap['lastName']?.text ?? '';
+                          data['email'] = ctrlMap['email']?.text ?? '';
+                          data['phone'] = ctrlMap['phone']?.text ?? '';
+                          data['address'] = ctrlMap['address']?.text ?? '';
+                          data['company'] = ctrlMap['company']?.text ?? '';
+                          data['externalInfo'] = ctrlMap['externalInfo']?.text ?? '';
                           break;
                         case 'create_folder_and_add_contact':
+                          data['folderName'] = ctrlMap['folderName']?.text ?? '';
                           final contact = data['contact'] ?? {};
-                          if ((data['folderName'] ?? '').isEmpty ||
-                              (contact['firstName'] ?? '').isEmpty ||
-                              (contact['lastName'] ?? '').isEmpty ||
-                              (contact['phone'] ?? '').isEmpty ||
-                              (contact['email'] ?? '').isEmpty ||
-                              (contact['address'] ?? '').isEmpty ||
-                              (contact['company'] ?? '').isEmpty ||
-                              (contact['externalInfo'] ?? '').isEmpty) {
-                            allValid = false;
-                            errorMessage =
-                                'Veuillez remplir tous les champs (folderName + contact).';
-                          }
+                          contact['firstName'] = ctrlMap['firstName']?.text ?? '';
+                          contact['lastName'] = ctrlMap['lastName']?.text ?? '';
+                          contact['email'] = ctrlMap['email']?.text ?? '';
+                          contact['phone'] = ctrlMap['phone']?.text ?? '';
+                          contact['address'] = ctrlMap['address']?.text ?? '';
+                          contact['company'] = ctrlMap['company']?.text ?? '';
+                          contact['externalInfo'] = ctrlMap['externalInfo']?.text ?? '';
+                          data['contact'] = contact;
                           break;
                         case 'modify_document':
-                          if ((data['folderName'] ?? '').isEmpty ||
-                              (data['documentName'] ?? '').isEmpty ||
-                              (data['variables'] ?? {}).isEmpty) {
-                            allValid = false;
-                            errorMessage =
-                                'Tous les champs (folderName, documentName, variables) sont requis.';
-                          }
+                          data['folderName'] = ctrlMap['folderName']?.text ?? '';
+                          data['documentName'] = ctrlMap['documentName']?.text ?? '';
                           break;
-                        default:
-                          allValid = false;
-                          errorMessage = 'Action inconnue ou non supportée.';
                       }
-                      if (!allValid) break;
+                      items[i]['data'] = data;
                     }
-
-                    if (!allValid) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text(errorMessage)),
-                      );
-                      return;
+                    String updatedContent;
+                    if (items.length == 1) {
+                      updatedContent = jsonEncode(items.first);
+                    } else {
+                      updatedContent = jsonEncode(items);
                     }
-
-                    // Mise à jour Firestore
+                    final user = FirebaseAuth.instance.currentUser;
+                    if (user == null) return;
                     try {
-                      // Ré-encoder : si 1 seul item => renvoi un objet, sinon => liste
-                      String updatedContent;
-                      if (items.length == 1) {
-                        updatedContent = jsonEncode(items.first);
-                      } else {
-                        updatedContent = jsonEncode(items);
-                      }
-
-                      // NOUVEAU : On repasse d'abord en pending_validation,
-                      // puis on repasse en validated pour relancer le stream.
-                      await _firestore.collection('chat_messages').doc(message.id).update({
+                      await _firestore
+                          .collection('workspaces')
+                          .doc(workspaceId)
+                          .collection('chat_messages')
+                          .doc(message.id)
+                          .update({
                         'content': updatedContent,
                         'status': 'pending_validation',
+                        'executed': false,
                       });
-
-                      await _firestore.collection('chat_messages').doc(message.id).update({
+                      await _firestore
+                          .collection('workspaces')
+                          .doc(workspaceId)
+                          .collection('chat_messages')
+                          .doc(message.id)
+                          .update({
                         'status': 'validated',
+                        'executed': false,
                       });
-
-                      debugPrint('Message mis à jour (double update).');
                       if (mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(content: Text('Message mis à jour avec succès.')),
                         );
                       }
                       Navigator.of(context).pop();
-                    } catch (e) {
-                      debugPrint('Erreur lors de la mise à jour du message: $e');
+                    } catch (_) {
                       if (mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(content: Text('Erreur lors de la mise à jour.')),
@@ -1626,47 +1526,258 @@ class _DashboardPageState extends State<DashboardPage>
     );
   }
 
-  /// Construit un éditeur pour l'action [items[index]].
-  Widget _buildActionEditor(
-    List<Map<String, dynamic>> items,
-    int index,
-    void Function(void Function()) setState2,
-  ) {
-    final item = items[index];
-    final String action = item['action'] ?? '(inconnu)';
-
+  Widget _buildActionEditor({
+    required List<Map<String, dynamic>> items,
+    required int index,
+    required Map<String, TextEditingController> controllersMap,
+    required VoidCallback onFieldChanged,
+  }) {
+    final jsonContent = items[index];
+    final String action = jsonContent['action'] ?? '';
     return ExpansionTile(
       initiallyExpanded: true,
-      title: Text(
-        'Action n°${index + 1} : $action',
-        style: const TextStyle(fontWeight: FontWeight.bold),
-      ),
+      title: Text('Action n°${index + 1} : $action'),
       children: [
         const SizedBox(height: 8),
-        // On construit les champs selon l'action
-        ..._buildEditableFields(item, setState2),
+        ..._buildEditableFields(jsonContent, controllersMap, onFieldChanged),
         const SizedBox(height: 16),
       ],
     );
   }
 
-  /// Détermine les champs à afficher selon l'action
   List<Widget> _buildEditableFields(
-    Map<String, dynamic> jsonContent,
-    void Function(void Function()) setState2,
-  ) {
-    String action = jsonContent['action'] ?? '';
+      Map<String, dynamic> jsonContent,
+      Map<String, TextEditingController> ctrlMap,
+      VoidCallback onFieldChanged) {
+    final String action = jsonContent['action'] ?? '';
     switch (action) {
       case 'create_task':
-        return _buildCreateTaskFields(jsonContent, setState2);
+        return [
+          TextFormField(
+            controller: ctrlMap['title'],
+            decoration: const InputDecoration(
+              labelText: 'Titre de la tâche',
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (value) => onFieldChanged(),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: ctrlMap['description'],
+            decoration: const InputDecoration(
+              labelText: 'Description',
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (value) => onFieldChanged(),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: ctrlMap['dueDate'],
+            decoration: const InputDecoration(
+              labelText: 'Date (YYYY-MM-DDTHH:MM:SSZ)',
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (value) => onFieldChanged(),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: ctrlMap['priority'],
+            decoration: const InputDecoration(
+              labelText: 'Priorité (Low, Medium, High)',
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (value) => onFieldChanged(),
+          ),
+        ];
       case 'create_folder_with_document':
-        return _buildCreateFolderWithDocumentFields(jsonContent, setState2);
+        return [
+          TextFormField(
+            controller: ctrlMap['folderName'],
+            decoration: const InputDecoration(
+              labelText: 'Nom du Dossier',
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (value) => onFieldChanged(),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: ctrlMap['docTitle'],
+            decoration: const InputDecoration(
+              labelText: 'Titre du Document',
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (value) => onFieldChanged(),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: ctrlMap['docContent'],
+            decoration: const InputDecoration(
+              labelText: 'Contenu du Document',
+              border: OutlineInputBorder(),
+            ),
+            maxLines: 3,
+            onChanged: (value) => onFieldChanged(),
+          ),
+        ];
       case 'add_contact':
-        return _buildAddContactFields(jsonContent, setState2);
+        return [
+          TextFormField(
+            controller: ctrlMap['firstName'],
+            decoration: const InputDecoration(
+              labelText: 'Prénom',
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (value) => onFieldChanged(),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: ctrlMap['lastName'],
+            decoration: const InputDecoration(
+              labelText: 'Nom',
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (value) => onFieldChanged(),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: ctrlMap['email'],
+            decoration: const InputDecoration(
+              labelText: 'Email',
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (value) => onFieldChanged(),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: ctrlMap['phone'],
+            decoration: const InputDecoration(
+              labelText: 'Téléphone',
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (value) => onFieldChanged(),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: ctrlMap['address'],
+            decoration: const InputDecoration(
+              labelText: 'Adresse',
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (value) => onFieldChanged(),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: ctrlMap['company'],
+            decoration: const InputDecoration(
+              labelText: 'Entreprise',
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (value) => onFieldChanged(),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: ctrlMap['externalInfo'],
+            decoration: const InputDecoration(
+              labelText: 'Informations Externes',
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (value) => onFieldChanged(),
+          ),
+        ];
       case 'create_folder_and_add_contact':
-        return _buildCreateFolderAndAddContactFields(jsonContent, setState2);
+        return [
+          TextFormField(
+            controller: ctrlMap['folderName'],
+            decoration: const InputDecoration(
+              labelText: 'Nom du Dossier',
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (value) => onFieldChanged(),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: ctrlMap['firstName'],
+            decoration: const InputDecoration(
+              labelText: 'Prénom du Contact',
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (value) => onFieldChanged(),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: ctrlMap['lastName'],
+            decoration: const InputDecoration(
+              labelText: 'Nom du Contact',
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (value) => onFieldChanged(),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: ctrlMap['email'],
+            decoration: const InputDecoration(
+              labelText: 'Email',
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (value) => onFieldChanged(),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: ctrlMap['phone'],
+            decoration: const InputDecoration(
+              labelText: 'Téléphone',
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (value) => onFieldChanged(),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: ctrlMap['address'],
+            decoration: const InputDecoration(
+              labelText: 'Adresse',
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (value) => onFieldChanged(),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: ctrlMap['company'],
+            decoration: const InputDecoration(
+              labelText: 'Entreprise',
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (value) => onFieldChanged(),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: ctrlMap['externalInfo'],
+            decoration: const InputDecoration(
+              labelText: 'Informations Externes',
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (value) => onFieldChanged(),
+          ),
+        ];
       case 'modify_document':
-        return _buildModifyDocumentFields(jsonContent, setState2);
+        return [
+          TextFormField(
+            controller: ctrlMap['folderName'],
+            decoration: const InputDecoration(
+              labelText: 'Nom du Dossier',
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (value) => onFieldChanged(),
+          ),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: ctrlMap['documentName'],
+            decoration: const InputDecoration(
+              labelText: 'Nom du Document',
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (value) => onFieldChanged(),
+          ),
+        ];
       default:
         return [
           Text(
@@ -1677,388 +1788,112 @@ class _DashboardPageState extends State<DashboardPage>
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // CHAMPS D'ÉDITION PAR ACTION
-  // ---------------------------------------------------------------------------
-  List<Widget> _buildCreateTaskFields(
-    Map<String, dynamic> jsonContent,
-    void Function(void Function()) setState2,
-  ) {
-    final data = jsonContent['data'] ?? <String, dynamic>{};
-    final titleController = TextEditingController(text: data['title'] ?? '');
-    final descController = TextEditingController(text: data['description'] ?? '');
-    final dueDateController = TextEditingController(text: data['dueDate'] ?? '');
-    String selectedPriority = data['priority'] ?? 'Low';
-
-    return [
-      TextFormField(
-        controller: titleController,
-        decoration: const InputDecoration(
-          labelText: 'Titre de la tâche',
-          border: OutlineInputBorder(),
-        ),
-        onChanged: (value) => setState2(() {
-          jsonContent['data']['title'] = value.trim();
-        }),
-      ),
-      const SizedBox(height: 8),
-      TextFormField(
-        controller: descController,
-        decoration: const InputDecoration(
-          labelText: 'Description',
-          border: OutlineInputBorder(),
-        ),
-        onChanged: (value) => setState2(() {
-          jsonContent['data']['description'] = value.trim();
-        }),
-      ),
-      const SizedBox(height: 8),
-      TextFormField(
-        controller: dueDateController,
-        decoration: const InputDecoration(
-          labelText: 'Date (YYYY-MM-DDTHH:MM:SSZ)',
-          border: OutlineInputBorder(),
-        ),
-        onChanged: (value) => setState2(() {
-          jsonContent['data']['dueDate'] = value.trim();
-        }),
-      ),
-      const SizedBox(height: 8),
-      DropdownButtonFormField<String>(
-        value: selectedPriority.isNotEmpty ? selectedPriority : null,
-        decoration: const InputDecoration(
-          labelText: 'Priorité',
-          border: OutlineInputBorder(),
-        ),
-        items: ['Low', 'Medium', 'High'].map((p) {
-          return DropdownMenuItem<String>(
-            value: p,
-            child: Text(p),
-          );
-        }).toList(),
-        onChanged: (value) => setState2(() {
-          if (value != null) {
-            selectedPriority = value;
-            jsonContent['data']['priority'] = value;
-          }
-        }),
-      ),
-    ];
-  }
-
-  List<Widget> _buildCreateFolderWithDocumentFields(
-    Map<String, dynamic> jsonContent,
-    void Function(void Function()) setState2,
-  ) {
-    final data = jsonContent['data'] ?? {};
-    final folderController = TextEditingController(text: data['folderName'] ?? '');
-    final doc = data['document'] ?? {};
-    final docTitleController = TextEditingController(text: doc['title'] ?? '');
-    final docContentController = TextEditingController(text: doc['content'] ?? '');
-
-    return [
-      TextFormField(
-        controller: folderController,
-        decoration: const InputDecoration(
-          labelText: 'Nom du Dossier',
-          border: OutlineInputBorder(),
-        ),
-        onChanged: (value) => setState2(() {
-          jsonContent['data']['folderName'] = value.trim();
-        }),
-      ),
-      const SizedBox(height: 8),
-      TextFormField(
-        controller: docTitleController,
-        decoration: const InputDecoration(
-          labelText: 'Titre du Document',
-          border: OutlineInputBorder(),
-        ),
-        onChanged: (value) => setState2(() {
-          jsonContent['data']['document']['title'] = value.trim();
-        }),
-      ),
-      const SizedBox(height: 8),
-      TextFormField(
-        controller: docContentController,
-        decoration: const InputDecoration(
-          labelText: 'Contenu du Document',
-          border: OutlineInputBorder(),
-        ),
-        maxLines: 3,
-        onChanged: (value) => setState2(() {
-          jsonContent['data']['document']['content'] = value.trim();
-        }),
-      ),
-    ];
-  }
-
-  List<Widget> _buildAddContactFields(
-    Map<String, dynamic> jsonContent,
-    void Function(void Function()) setState2,
-  ) {
-    final data = jsonContent['data'] ?? {};
-    final firstNameController = TextEditingController(text: data['firstName'] ?? '');
-    final lastNameController = TextEditingController(text: data['lastName'] ?? '');
-    final emailController = TextEditingController(text: data['email'] ?? '');
-    final phoneController = TextEditingController(text: data['phone'] ?? '');
-    final addressController = TextEditingController(text: data['address'] ?? '');
-    final companyController = TextEditingController(text: data['company'] ?? '');
-    final externalInfoController = TextEditingController(text: data['externalInfo'] ?? '');
-
-    return [
-      TextFormField(
-        controller: firstNameController,
-        decoration: const InputDecoration(
-          labelText: 'Prénom',
-          border: OutlineInputBorder(),
-        ),
-        onChanged: (value) => setState2(() {
-          data['firstName'] = value.trim();
-        }),
-      ),
-      const SizedBox(height: 8),
-      TextFormField(
-        controller: lastNameController,
-        decoration: const InputDecoration(
-          labelText: 'Nom',
-          border: OutlineInputBorder(),
-        ),
-        onChanged: (value) => setState2(() {
-          data['lastName'] = value.trim();
-        }),
-      ),
-      const SizedBox(height: 8),
-      TextFormField(
-        controller: emailController,
-        decoration: const InputDecoration(
-          labelText: 'Email',
-          border: OutlineInputBorder(),
-        ),
-        onChanged: (value) => setState2(() {
-          data['email'] = value.trim();
-        }),
-      ),
-      const SizedBox(height: 8),
-      TextFormField(
-        controller: phoneController,
-        decoration: const InputDecoration(
-          labelText: 'Téléphone',
-          border: OutlineInputBorder(),
-        ),
-        onChanged: (value) => setState2(() {
-          data['phone'] = value.trim();
-        }),
-      ),
-      const SizedBox(height: 8),
-      TextFormField(
-        controller: addressController,
-        decoration: const InputDecoration(
-          labelText: 'Adresse',
-          border: OutlineInputBorder(),
-        ),
-        onChanged: (value) => setState2(() {
-          data['address'] = value.trim();
-        }),
-      ),
-      const SizedBox(height: 8),
-      TextFormField(
-        controller: companyController,
-        decoration: const InputDecoration(
-          labelText: 'Entreprise',
-          border: OutlineInputBorder(),
-        ),
-        onChanged: (value) => setState2(() {
-          data['company'] = value.trim();
-        }),
-      ),
-      const SizedBox(height: 8),
-      TextFormField(
-        controller: externalInfoController,
-        decoration: const InputDecoration(
-          labelText: 'Informations Externes',
-          border: OutlineInputBorder(),
-        ),
-        onChanged: (value) => setState2(() {
-          data['externalInfo'] = value.trim();
-        }),
-      ),
-    ];
-  }
-
-  List<Widget> _buildCreateFolderAndAddContactFields(
-    Map<String, dynamic> jsonContent,
-    void Function(void Function()) setState2,
-  ) {
-    final data = jsonContent['data'] ?? {};
-    final folderController = TextEditingController(text: data['folderName'] ?? '');
-    final contact = data['contact'] ?? {};
-    final firstNameController = TextEditingController(text: contact['firstName'] ?? '');
-    final lastNameController = TextEditingController(text: contact['lastName'] ?? '');
-    final emailController = TextEditingController(text: contact['email'] ?? '');
-    final phoneController = TextEditingController(text: contact['phone'] ?? '');
-    final addressController = TextEditingController(text: contact['address'] ?? '');
-    final companyController = TextEditingController(text: contact['company'] ?? '');
-    final externalInfoController = TextEditingController(text: contact['externalInfo'] ?? '');
-
-    return [
-      TextFormField(
-        controller: folderController,
-        decoration: const InputDecoration(
-          labelText: 'Nom du Dossier',
-          border: OutlineInputBorder(),
-        ),
-        onChanged: (value) => setState2(() {
-          data['folderName'] = value.trim();
-        }),
-      ),
-      const SizedBox(height: 8),
-      TextFormField(
-        controller: firstNameController,
-        decoration: const InputDecoration(
-          labelText: 'Prénom du Contact',
-          border: OutlineInputBorder(),
-        ),
-        onChanged: (value) => setState2(() {
-          contact['firstName'] = value.trim();
-        }),
-      ),
-      const SizedBox(height: 8),
-      TextFormField(
-        controller: lastNameController,
-        decoration: const InputDecoration(
-          labelText: 'Nom du Contact',
-          border: OutlineInputBorder(),
-        ),
-        onChanged: (value) => setState2(() {
-          contact['lastName'] = value.trim();
-        }),
-      ),
-      const SizedBox(height: 8),
-      TextFormField(
-        controller: emailController,
-        decoration: const InputDecoration(
-          labelText: 'Email',
-          border: OutlineInputBorder(),
-        ),
-        onChanged: (value) => setState2(() {
-          contact['email'] = value.trim();
-        }),
-      ),
-      const SizedBox(height: 8),
-      TextFormField(
-        controller: phoneController,
-        decoration: const InputDecoration(
-          labelText: 'Téléphone',
-          border: OutlineInputBorder(),
-        ),
-        onChanged: (value) => setState2(() {
-          contact['phone'] = value.trim();
-        }),
-      ),
-      const SizedBox(height: 8),
-      TextFormField(
-        controller: addressController,
-        decoration: const InputDecoration(
-          labelText: 'Adresse',
-          border: OutlineInputBorder(),
-        ),
-        onChanged: (value) => setState2(() {
-          contact['address'] = value.trim();
-        }),
-      ),
-      const SizedBox(height: 8),
-      TextFormField(
-        controller: companyController,
-        decoration: const InputDecoration(
-          labelText: 'Entreprise',
-          border: OutlineInputBorder(),
-        ),
-        onChanged: (value) => setState2(() {
-          contact['company'] = value.trim();
-        }),
-      ),
-      const SizedBox(height: 8),
-      TextFormField(
-        controller: externalInfoController,
-        decoration: const InputDecoration(
-          labelText: 'Informations Externes',
-          border: OutlineInputBorder(),
-        ),
-        onChanged: (value) => setState2(() {
-          contact['externalInfo'] = value.trim();
-        }),
-      ),
-    ];
-  }
-
-  List<Widget> _buildModifyDocumentFields(
-    Map<String, dynamic> jsonContent,
-    void Function(void Function()) setState2,
-  ) {
-    final data = jsonContent['data'] ?? {};
-    final folderController = TextEditingController(text: data['folderName'] ?? '');
-    final docNameController = TextEditingController(text: data['documentName'] ?? '');
-    Map<String, dynamic> variables =
-        Map<String, dynamic>.from(data['variables'] ?? {});
-
-    List<Widget> variableFields = [];
-    variables.forEach((key, val) {
-      final controller = TextEditingController(text: val.toString());
-      variableFields.add(
-        TextFormField(
-          controller: controller,
-          decoration: InputDecoration(
-            labelText: key,
-            border: const OutlineInputBorder(),
+  Widget _buildNotificationsSection() {
+    return SizedBox(
+      width: double.infinity,
+      child: Card(
+        elevation: 4,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        color: Colors.white,
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Notifications',
+                style: GoogleFonts.roboto(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: neutralDark,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Aucune notification pour le moment.',
+                style: GoogleFonts.roboto(
+                  fontSize: 16,
+                  color: Colors.grey[600],
+                ),
+              ),
+            ],
           ),
-          onChanged: (v) => setState2(() {
-            variables[key] = v.trim();
-          }),
         ),
-      );
-      variableFields.add(const SizedBox(height: 8));
-    });
-
-    return [
-      TextFormField(
-        controller: folderController,
-        decoration: const InputDecoration(
-          labelText: 'Nom du Dossier',
-          border: OutlineInputBorder(),
-        ),
-        onChanged: (value) => setState2(() {
-          data['folderName'] = value.trim();
-        }),
       ),
-      const SizedBox(height: 8),
-      TextFormField(
-        controller: docNameController,
-        decoration: const InputDecoration(
-          labelText: 'Nom du Document',
-          border: OutlineInputBorder(),
-        ),
-        onChanged: (value) => setState2(() {
-          data['documentName'] = value.trim();
-        }),
-      ),
-      const SizedBox(height: 8),
-      ...variableFields,
-      // Mettre à jour les variables modifiées dans le JSON
-      Builder(builder: (context) {
-        data['variables'] = variables;
-        return const SizedBox.shrink();
-      }),
-    ];
+    );
   }
 
-  // ---------------------------------------------------------------------------
-  // DISPOSITION GLOBALE
-  // ---------------------------------------------------------------------------
+  Widget _buildConnectedUsersSection() {
+    return Card(
+      elevation: 4,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      color: Colors.white,
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Utilisateurs Connectés',
+              style: GoogleFonts.roboto(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: neutralDark,
+              ),
+            ),
+            const SizedBox(height: 10),
+            _connectedUsers.isEmpty
+                ? Center(
+                    child: Text(
+                      'Aucun utilisateur connecté.',
+                      style: GoogleFonts.roboto(
+                        fontSize: 16,
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                  )
+                : Column(
+                    children: _connectedUsers.map((user) {
+                      return ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: Colors.blueAccent,
+                          child: Text(
+                            user.displayName.isNotEmpty
+                                ? user.displayName[0].toUpperCase()
+                                : '?',
+                            style: const TextStyle(color: Colors.white),
+                          ),
+                        ),
+                        title: Text(
+                          user.displayName,
+                          style: GoogleFonts.roboto(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.black87,
+                          ),
+                        ),
+                        subtitle: Text(
+                          'Statut: ${user.isOnline ? 'En Ligne' : 'Hors Ligne'}',
+                          style: GoogleFonts.roboto(
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                        trailing: Icon(
+                          user.isOnline ? Icons.circle : Icons.circle_outlined,
+                          color: user.isOnline ? Colors.green : Colors.red,
+                          size: 16,
+                        ),
+                      );
+                    }).toList(),
+                  ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final authService = Provider.of<AuthService>(context, listen: false);
-
     return Scaffold(
       backgroundColor: const Color.fromARGB(255, 197, 197, 197),
       body: SafeArea(
@@ -2068,7 +1903,6 @@ class _DashboardPageState extends State<DashboardPage>
               builder: (context, constraints) {
                 return Column(
                   children: [
-                    // Bouton de déconnexion en haut à droite
                     Row(
                       mainAxisAlignment: MainAxisAlignment.end,
                       children: [
@@ -2092,7 +1926,6 @@ class _DashboardPageState extends State<DashboardPage>
                 );
               },
             ),
-            // Barre vocale en bas si petit écran
             if (MediaQuery.of(context).size.width < 600)
               _buildVoiceChatContainer(),
           ],
@@ -2105,15 +1938,17 @@ class _DashboardPageState extends State<DashboardPage>
     return SingleChildScrollView(
       child: Column(
         children: [
-          // Menu latéral version mobile
+          // Cartes de fonctionnalités
           Padding(
             padding: const EdgeInsets.all(16.0),
-            child: Column(
+            child: Wrap(
+              spacing: 16,
+              runSpacing: 16,
               children: dashboardItems.map((item) => FeatureCard(item: item)).toList(),
             ),
           ),
           const SizedBox(height: 16),
-          // Avatar + nom
+          // Section Profil
           Consumer<AuthService>(
             builder: (context, authService, child) {
               return GestureDetector(
@@ -2138,19 +1973,22 @@ class _DashboardPageState extends State<DashboardPage>
             },
           ),
           const SizedBox(height: 16),
-          // Assistant IA
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: SizedBox(
-              height: 400,
-              child: _buildChatAssistantSection(),
-            ),
-          ),
-          const SizedBox(height: 16),
-          // Tâches
+          // Section Tâches à Venir
           Padding(
             padding: const EdgeInsets.all(16.0),
             child: _buildUpcomingTasksSection(),
+          ),
+          const SizedBox(height: 16),
+          // Section Utilisateurs Connectés
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: _buildConnectedUsersSection(),
+          ),
+          const SizedBox(height: 16),
+          // Section Assistant IA
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: _buildChatAssistantSection(),
           ),
           const SizedBox(height: 16),
         ],
@@ -2161,7 +1999,7 @@ class _DashboardPageState extends State<DashboardPage>
   Widget _buildDesktopLayout() {
     return Row(
       children: [
-        // Barre latérale gauche
+        // Sidebar
         Container(
           width: 250,
           padding: const EdgeInsets.all(16.0),
@@ -2179,12 +2017,11 @@ class _DashboardPageState extends State<DashboardPage>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // Section Profil
               Consumer<AuthService>(
                 builder: (context, authService, child) {
                   return GestureDetector(
-                    onTap: () {
-                      _navigateToProfile();
-                    },
+                    onTap: _navigateToProfile,
                     child: Row(
                       children: [
                         ProfileAvatar(radius: 30),
@@ -2205,13 +2042,14 @@ class _DashboardPageState extends State<DashboardPage>
                 },
               ),
               const SizedBox(height: 20),
+              // Cartes de fonctionnalités
               Expanded(
                 child: ListView(
                   children: dashboardItems.map((item) => FeatureCard(item: item)).toList(),
                 ),
               ),
               const SizedBox(height: 20),
-              // Barre vocale (micro + TTS) en bas de la sidebar
+              // Contrôles vocaux
               Container(
                 decoration: BoxDecoration(
                   color: Colors.grey[100],
@@ -2235,7 +2073,7 @@ class _DashboardPageState extends State<DashboardPage>
                         child: CircleAvatar(
                           backgroundColor: _isListening ? Colors.redAccent : Colors.grey[400],
                           child: Icon(
-                            _isListening ? Icons.mic_off : Icons.mic,
+                            _isTtsEnabled ? Icons.mic_off : Icons.mic,
                             color: Colors.white,
                           ),
                         ),
@@ -2247,9 +2085,7 @@ class _DashboardPageState extends State<DashboardPage>
                         color: _isTtsEnabled ? Colors.blueAccent : Colors.grey,
                         size: 28,
                       ),
-                      tooltip: _isTtsEnabled
-                          ? 'Désactiver la lecture vocale'
-                          : 'Activer la lecture vocale',
+                      tooltip: _isTtsEnabled ? 'Désactiver la lecture vocale' : 'Activer la lecture vocale',
                       onPressed: () {
                         if (!mounted) return;
                         setState(() {
@@ -2257,11 +2093,7 @@ class _DashboardPageState extends State<DashboardPage>
                         });
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
-                            content: Text(
-                              _isTtsEnabled
-                                  ? 'Lecture vocale activée'
-                                  : 'Lecture vocale désactivée',
-                            ),
+                            content: Text(_isTtsEnabled ? 'Lecture vocale activée' : 'Lecture vocale désactivée'),
                           ),
                         );
                       },
@@ -2278,23 +2110,46 @@ class _DashboardPageState extends State<DashboardPage>
           ),
         ),
         const SizedBox(width: 16),
-        // Partie droite : Chat IA + Tâches
+        // Zone principale
         Expanded(
-          child: Column(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              // Assistant IA
               Expanded(
-                flex: 2,
+                flex: 3,
                 child: Padding(
                   padding: const EdgeInsets.all(16.0),
                   child: _buildChatAssistantSection(),
                 ),
               ),
-              const SizedBox(height: 16),
+              // Colonne droite
               Expanded(
                 flex: 1,
                 child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: _buildUpcomingTasksSection(),
+                  padding: const EdgeInsets.only(top: 16.0, bottom: 16.0, right: 16.0),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.max,
+                    children: [
+                      // Tâches à venir
+                      Expanded(
+                        flex: 5,
+                        child: _buildUpcomingTasksSection(),
+                      ),
+                      const SizedBox(height: 16),
+                      // Utilisateurs connectés
+                      Expanded(
+                        flex: 3,
+                        child: _buildConnectedUsersSection(),
+                      ),
+                      const SizedBox(height: 16),
+                      // Notifications
+                      Expanded(
+                        flex: 2,
+                        child: _buildNotificationsSection(),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ],
@@ -2304,7 +2159,6 @@ class _DashboardPageState extends State<DashboardPage>
     );
   }
 
-  // Barre vocale en bas (mobile uniquement)
   Widget _buildVoiceChatContainer() {
     return Positioned(
       bottom: 20,
@@ -2336,7 +2190,7 @@ class _DashboardPageState extends State<DashboardPage>
                       child: CircleAvatar(
                         backgroundColor: _isListening ? Colors.redAccent : Colors.grey[400],
                         child: Icon(
-                          _isListening ? Icons.mic_off : Icons.mic,
+                          _isTtsEnabled ? Icons.mic_off : Icons.mic,
                           color: Colors.white,
                         ),
                       ),
@@ -2347,9 +2201,7 @@ class _DashboardPageState extends State<DashboardPage>
                       _isTtsEnabled ? Icons.headset : Icons.headset_off,
                       color: _isTtsEnabled ? Colors.blueAccent : Colors.grey,
                     ),
-                    tooltip: _isTtsEnabled
-                        ? 'Désactiver la lecture vocale'
-                        : 'Activer la lecture vocale',
+                    tooltip: _isTtsEnabled ? 'Désactiver la lecture vocale' : 'Activer la lecture vocale',
                     onPressed: () {
                       if (!mounted) return;
                       setState(() {
@@ -2357,11 +2209,7 @@ class _DashboardPageState extends State<DashboardPage>
                       });
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
-                          content: Text(
-                            _isTtsEnabled
-                                ? 'Lecture vocale activée'
-                                : 'Lecture vocale désactivée',
-                          ),
+                          content: Text(_isTtsEnabled ? 'Lecture vocale activée' : 'Lecture vocale désactivée'),
                         ),
                       );
                     },
@@ -2383,7 +2231,6 @@ class _DashboardPageState extends State<DashboardPage>
   }
 }
 
-/// Widget pour chaque fonctionnalité du dashboard
 class FeatureCard extends StatefulWidget {
   final DashboardItem item;
   const FeatureCard({Key? key, required this.item}) : super(key: key);
@@ -2408,7 +2255,9 @@ class _FeatureCardState extends State<FeatureCard>
       lowerBound: 1.0,
       upperBound: 1.05,
     );
-    _scaleAnimation = Tween<double>(begin: 1.0, end: 1.05).animate(_scaleController);
+    _scaleAnimation = Tween<double>(begin: 1.0, end: 1.05).animate(
+      CurvedAnimation(parent: _scaleController, curve: Curves.easeInOut),
+    );
   }
 
   @override
@@ -2455,7 +2304,9 @@ class _FeatureCardState extends State<FeatureCard>
 
   void _navigateToPage() {
     if (widget.item.routeName.isNotEmpty) {
-      Navigator.pushNamed(context, widget.item.routeName);
+      Navigator.pushNamed(context, widget.item.routeName, arguments: {
+        'workspaceId': (context.findAncestorStateOfType<_DashboardPageState>()?.workspaceId ?? '')
+      });
     }
   }
 
@@ -2509,6 +2360,27 @@ class _FeatureCardState extends State<FeatureCard>
           ),
         ),
       ),
+    );
+  }
+}
+
+class UserModel {
+  final String id;
+  final String displayName;
+  final bool isOnline;
+
+  UserModel({
+    required this.id,
+    required this.displayName,
+    required this.isOnline,
+  });
+
+  factory UserModel.fromFirestore(DocumentSnapshot doc) {
+    Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
+    return UserModel(
+      id: doc.id,
+      displayName: data['displayName'] ?? 'Utilisateur',
+      isOnline: data['isOnline'] ?? false,
     );
   }
 }

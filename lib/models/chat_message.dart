@@ -10,10 +10,10 @@ enum MessageType {
 
 /// Enumération des statuts des messages.
 enum MessageStatus {
-  pending_validation,  // En attente de validation
-  validated,           // Validé par l'utilisateur
-  rejected,            // Rejeté par l'utilisateur
-  modified,            // Modifié par l'utilisateur
+  pending_validation, // En attente de validation
+  validated,          // Validé par l'utilisateur
+  rejected,           // Rejeté par l'utilisateur
+  modified,           // Modifié par l'utilisateur
 }
 
 /// Modèle de données pour un message de chat.
@@ -47,17 +47,13 @@ class ChatMessage {
     return ChatMessage(
       id: doc.id,
       content: data['content'] ?? '',
-      type: MessageType.values.firstWhere(
-          (e) => e.toString().split('.').last == data['type'],
-          orElse: () => MessageType.ai),
+      type: _stringToMessageType(data['type']),
       userId: data['userId'] ?? '',
       userEmail: data['userEmail'] ?? 'Utilisateur Inconnu',
       timestamp: data['timestamp'] != null
           ? (data['timestamp'] as Timestamp).toDate()
           : DateTime.now(),
-      status: MessageStatus.values.firstWhere(
-          (e) => e.toString().split('.').last == data['status'],
-          orElse: () => MessageStatus.pending_validation),
+      status: _stringToMessageStatus(data['status']),
       isDraft: data['isDraft'] ?? false,
       version: data['version'] ?? 0, // Assignation avec valeur par défaut
     );
@@ -67,11 +63,11 @@ class ChatMessage {
   Map<String, dynamic> toMap() {
     return {
       'content': content,
-      'type': type.toString().split('.').last,
+      'type': _messageTypeToString(type),
       'userId': userId,
       'userEmail': userEmail,
       'timestamp': Timestamp.fromDate(timestamp),
-      'status': status.toString().split('.').last,
+      'status': _messageStatusToString(status),
       'isDraft': isDraft,
       'version': version, // version est non nullable
     };
@@ -106,4 +102,42 @@ class ChatMessage {
 
   /// Indique si le message est de type utilisateur
   bool get isUser => type == MessageType.user;
+
+  /// Convertit une chaîne en MessageType
+  static MessageType _stringToMessageType(String? type) {
+    switch (type) {
+      case 'user':
+        return MessageType.user;
+      case 'ai':
+        return MessageType.ai;
+      default:
+        return MessageType.ai;
+    }
+  }
+
+  /// Convertit une chaîne en MessageStatus
+  static MessageStatus _stringToMessageStatus(String? status) {
+    switch (status) {
+      case 'pending_validation':
+        return MessageStatus.pending_validation;
+      case 'validated':
+        return MessageStatus.validated;
+      case 'rejected':
+        return MessageStatus.rejected;
+      case 'modified':
+        return MessageStatus.modified;
+      default:
+        return MessageStatus.pending_validation;
+    }
+  }
+
+  /// Convertit un MessageType en chaîne
+  static String _messageTypeToString(MessageType type) {
+    return type.toString().split('.').last;
+  }
+
+  /// Convertit un MessageStatus en chaîne
+  static String _messageStatusToString(MessageStatus status) {
+    return status.toString().split('.').last;
+  }
 }

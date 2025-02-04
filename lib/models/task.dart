@@ -2,18 +2,17 @@
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-/// **Enums pour le Statut et la Priorité des Tâches**
-
+/// Enums pour le Statut et la Priorité des Tâches
 enum TaskStatus { PendingValidation, ToDo, InProgress, Done, Pending }
 enum TaskPriority { Low, Medium, High }
 
-/// **Modèle de Données pour une Tâche**
-
+/// Modèle de Données pour une Tâche
 class Task {
   final String id;
   final String title;
   final String description;
   final DateTime dueDate;
+  final int duration; // Durée en minutes
   final String assignee; // ID de l'utilisateur assigné
   final String assigneeName; // Pseudo de l'utilisateur assigné
   final TaskStatus status;
@@ -24,13 +23,15 @@ class Task {
     required this.title,
     required this.description,
     required this.dueDate,
+    required this.duration,
     required this.assignee,
     required this.assigneeName,
     required this.status,
     required this.priority,
   });
 
-  /// Convertir un document Firestore en objet Task
+  /// Convertir un document Firestore en objet Task.
+  /// Le champ "duration" est récupéré s'il existe, sinon la durée par défaut est fixée à 60 minutes.
   factory Task.fromFirestore(DocumentSnapshot doc) {
     Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
     return Task(
@@ -38,6 +39,7 @@ class Task {
       title: data['title'] ?? '',
       description: data['description'] ?? '',
       dueDate: (data['dueDate'] as Timestamp).toDate(),
+      duration: data['duration'] ?? 60, // Durée par défaut : 60 minutes
       assignee: data['assignee'] ?? '',
       assigneeName: data['assigneeName'] ?? 'Non assigné',
       status: _statusFromString(data['status'] ?? 'ToDo'),
@@ -45,12 +47,13 @@ class Task {
     );
   }
 
-  /// Convertir un objet Task en map pour Firestore
+  /// Convertir un objet Task en Map pour Firestore.
   Map<String, dynamic> toMap() {
     return {
       'title': title,
       'description': description,
       'dueDate': Timestamp.fromDate(dueDate),
+      'duration': duration,
       'assignee': assignee,
       'assigneeName': assigneeName,
       'status': _statusToString(status),
@@ -58,7 +61,7 @@ class Task {
     };
   }
 
-  /// Helpers pour les enums
+  // Helpers pour convertir les enums
   static TaskStatus _statusFromString(String status) {
     switch (status) {
       case 'PendingValidation':
