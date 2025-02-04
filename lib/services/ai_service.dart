@@ -23,8 +23,7 @@ class AIService with ChangeNotifier {
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
   // Charger la clé API depuis les variables d'environnement pour plus de sécurité.
-  static const String _apiKey =
-      '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';
+
 
   // Map des handlers d'actions.
   late final Map<AIActionType, Future<void> Function(Map<String, dynamic>)> _actionHandlers;
