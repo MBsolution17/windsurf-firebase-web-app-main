@@ -17,6 +17,8 @@ class Task {
   final String assigneeName; // Pseudo de l'utilisateur assigné
   final TaskStatus status;
   final TaskPriority priority;
+  final String? color; // Ajout du champ color (stocké comme String, ex: "0xFF0000")
+  final String? customText; // Ajout du champ customText
 
   Task({
     required this.id,
@@ -28,6 +30,8 @@ class Task {
     required this.assigneeName,
     required this.status,
     required this.priority,
+    this.color,
+    this.customText,
   });
 
   /// Convertir un document Firestore en objet Task.
@@ -44,6 +48,8 @@ class Task {
       assigneeName: data['assigneeName'] ?? 'Non assigné',
       status: _statusFromString(data['status'] ?? 'ToDo'),
       priority: _priorityFromString(data['priority'] ?? 'Low'),
+      color: data['color'], // Récupère le champ color
+      customText: data['customText'], // Récupère le champ customText
     );
   }
 
@@ -58,6 +64,8 @@ class Task {
       'assigneeName': assigneeName,
       'status': _statusToString(status),
       'priority': _priorityToString(priority),
+      'color': color, // Ajoute le champ color
+      'customText': customText, // Ajoute le champ customText
     };
   }
 
@@ -75,7 +83,7 @@ class Task {
       case 'Pending':
         return TaskStatus.Pending;
       default:
-        return TaskStatus.PendingValidation;
+        return TaskStatus.PendingValidation; // Valeur par défaut
     }
   }
 
@@ -103,7 +111,7 @@ class Task {
       case 'High':
         return TaskPriority.High;
       default:
-        return TaskPriority.Low;
+        return TaskPriority.Low; // Valeur par défaut
     }
   }
 

@@ -1,5 +1,3 @@
-// lib/models/contact.dart
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class Contact {
@@ -16,16 +14,16 @@ class Contact {
   final DateTime timestamp;
 
   Contact({
-    required this.id,
+    this.id = '',
     required this.userId,
-    required this.firstName,
-    required this.lastName,
-    required this.email,
-    required this.phone,
-    required this.address,
-    required this.company,
-    required this.externalInfo,
-    required this.folderId,
+    this.firstName = '',
+    this.lastName = '',
+    this.email = '',
+    this.phone = '',
+    this.address = '',
+    this.company = '',
+    this.externalInfo = '',
+    this.folderId = '',
     required this.timestamp,
   });
 
@@ -42,7 +40,7 @@ class Contact {
       company: data['company'] ?? '',
       externalInfo: data['externalInfo'] ?? '',
       folderId: data['folderId'] ?? '',
-      timestamp: (data['timestamp'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      timestamp: (data['timestamp'] as Timestamp).toDate(),
     );
   }
 
@@ -59,5 +57,19 @@ class Contact {
       'folderId': folderId,
       'timestamp': Timestamp.fromDate(timestamp),
     };
+  }
+
+  factory Contact.fromJson(Map<String, dynamic> json, String userId) {
+    return Contact(
+      userId: userId,
+      firstName: json['firstName'] ?? '',
+      lastName: json['lastName'] ?? '',
+      email: json['email'] ?? '',
+      phone: json['phone'] ?? '',
+      address: json['address'] ?? '',
+      company: json['company'] ?? '',
+      externalInfo: json['externalInfo'] ?? '',
+      timestamp: DateTime.now(),
+    );
   }
 }

@@ -1,10 +1,12 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart'; // Ajout pour accéder au ThemeProvider
 
 import '../models/contact.dart';
 import '../models/folder.dart';
 import '../models/task.dart';
+import '../theme_provider.dart'; // Assurez-vous que le chemin est correct
 
 class ContactDetailPage extends StatefulWidget {
   final String workspaceId;
@@ -85,14 +87,19 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
 
   @override
   Widget build(BuildContext context) {
-    // Fond gris clair pour l'ensemble de la page
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: Colors.grey[800],
-        title: Text('${widget.contact.firstName} ${widget.contact.lastName}',
-            style: GoogleFonts.roboto()),
+        backgroundColor: Theme.of(context).primaryColor, // Couleur principale du thème
+        title: Text(
+          '${widget.contact.firstName} ${widget.contact.lastName}',
+          style: Theme.of(context)
+              .textTheme
+              .titleLarge
+              ?.copyWith(color: Colors.white),
+        ),
+        iconTheme: Theme.of(context).iconTheme, // Icônes selon le thème
       ),
-      backgroundColor: Colors.grey[50],
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor, // Fond selon le thème
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -101,7 +108,7 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
             // Informations du contact
             Text(
               'Détails du Contact',
-              style: GoogleFonts.roboto(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.grey[800]),
+              style: Theme.of(context).textTheme.titleLarge,
             ),
             const SizedBox(height: 12),
             _buildDetailRow('Email', widget.contact.email),
@@ -118,15 +125,27 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
                   return const Center(child: CircularProgressIndicator());
                 }
                 if (!snapshot.hasData || snapshot.data == null) {
-                  return Text('Aucun dossier associé', style: GoogleFonts.roboto(fontSize: 16, fontStyle: FontStyle.italic, color: Colors.grey[600]));
+                  return Text(
+                    'Aucun dossier associé',
+                    style: Theme.of(context)
+                        .textTheme
+                        .bodyMedium
+                        ?.copyWith(fontStyle: FontStyle.italic),
+                  );
                 }
                 Folder folder = snapshot.data!;
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Dossier associé', style: GoogleFonts.roboto(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.grey[800])),
+                    Text(
+                      'Dossier associé',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
                     const SizedBox(height: 8),
-                    Text('Nom : ${folder.name}', style: GoogleFonts.roboto(fontSize: 16)),
+                    Text(
+                      'Nom : ${folder.name}',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
                   ],
                 );
               },
@@ -140,21 +159,41 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
                   return const Center(child: CircularProgressIndicator());
                 }
                 if (!snapshot.hasData || snapshot.data!.isEmpty) {
-                  return Text('Aucune tâche liée à ce contact', style: GoogleFonts.roboto(fontSize: 16, fontStyle: FontStyle.italic, color: Colors.grey[600]));
+                  return Text(
+                    'Aucune tâche liée à ce contact',
+                    style: Theme.of(context)
+                        .textTheme
+                        .bodyMedium
+                        ?.copyWith(fontStyle: FontStyle.italic),
+                  );
                 }
                 List<Task> tasks = snapshot.data!;
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Tâches liées', style: GoogleFonts.roboto(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.grey[800])),
+                    Text(
+                      'Tâches liées',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
                     const SizedBox(height: 8),
                     ...tasks.map((task) => Card(
                           elevation: 2,
                           margin: const EdgeInsets.symmetric(vertical: 4),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
+                          color: Theme.of(context).cardColor, // Couleur de la carte selon le thème
                           child: ListTile(
-                            title: Text(task.title, style: GoogleFonts.roboto()),
-                            subtitle: Text(task.description, style: GoogleFonts.roboto(fontSize: 12)),
+                            title: Text(
+                              task.title,
+                              style: Theme.of(context).textTheme.bodyLarge,
+                            ),
+                            subtitle: Text(
+                              task.description,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodyMedium
+                                  ?.copyWith(fontSize: 12),
+                            ),
                           ),
                         )),
                   ],
@@ -163,7 +202,10 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
             ),
             const SizedBox(height: 20),
             // Section Notes externes
-            Text('Notes externes', style: GoogleFonts.roboto(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.grey[800])),
+            Text(
+              'Notes externes',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
             const SizedBox(height: 8),
             FutureBuilder<List<String>>(
               future: _fetchNotes(),
@@ -173,20 +215,33 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
                 }
                 List<String> notes = snapshot.data ?? [];
                 if (notes.isEmpty) {
-                  return Text('Aucune note enregistrée', style: GoogleFonts.roboto(fontStyle: FontStyle.italic, color: Colors.grey[600]));
+                  return Text(
+                    'Aucune note enregistrée',
+                    style: Theme.of(context)
+                        .textTheme
+                        .bodyMedium
+                        ?.copyWith(fontStyle: FontStyle.italic),
+                  );
                 }
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
-                  children: notes.map((note) => Container(
-                    width: double.infinity,
-                    margin: const EdgeInsets.symmetric(vertical: 4),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[200],
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(note, style: GoogleFonts.roboto()),
-                  )).toList(),
+                  children: notes
+                      .map((note) => Container(
+                            width: double.infinity,
+                            margin: const EdgeInsets.symmetric(vertical: 4),
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Theme.of(context)
+                                  .dividerColor
+                                  ?.withOpacity(0.2), // Nuance subtile selon le thème
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              note,
+                              style: Theme.of(context).textTheme.bodyMedium,
+                            ),
+                          ))
+                      .toList(),
                 );
               },
             ),
@@ -197,28 +252,35 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
                 Expanded(
                   child: TextField(
                     controller: _noteController,
-                    style: GoogleFonts.roboto(),
+                    style: Theme.of(context).textTheme.bodyMedium,
                     decoration: InputDecoration(
                       hintText: 'Ajouter une note...',
                       filled: true,
-                      fillColor: Colors.grey[100],
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                      fillColor:
+                          Theme.of(context).dividerColor?.withOpacity(0.2),
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8)),
                     ),
                   ),
                 ),
                 const SizedBox(width: 8),
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.grey[800],
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(8),
                     ),
-                  ),
+                  ), // Utilise le style par défaut du thème
                   onPressed: () => _addNote(_noteController.text),
-                  child: Text('Ajouter', style: GoogleFonts.roboto(color: Colors.white)),
-                )
+                  child: Text(
+                    'Ajouter',
+                    style: Theme.of(context)
+                        .textTheme
+                        .bodyMedium
+                        ?.copyWith(color: Colors.white),
+                  ),
+                ),
               ],
-            )
+            ),
           ],
         ),
       ),
@@ -232,8 +294,19 @@ class _ContactDetailPageState extends State<ContactDetailPage> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('$label : ', style: GoogleFonts.roboto(fontWeight: FontWeight.bold, color: Colors.grey[800])),
-          Expanded(child: Text(value.isNotEmpty ? value : '-', style: GoogleFonts.roboto())),
+          Text(
+            '$label : ',
+            style: Theme.of(context)
+                .textTheme
+                .bodyMedium
+                ?.copyWith(fontWeight: FontWeight.bold),
+          ),
+          Expanded(
+            child: Text(
+              value.isNotEmpty ? value : '-',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ),
         ],
       ),
     );

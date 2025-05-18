@@ -1,11 +1,11 @@
 {
-    "name": "firebase_web_app",
-    "short_name": "firebase_web_app",
+    "name": "Boundly",
+    "short_name": "Boundly",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "Plateforme de collaboration intégrée pour vos équipes",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

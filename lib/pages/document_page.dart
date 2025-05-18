@@ -1,10 +1,8 @@
-// lib/pages/document_page.dart
-
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:io' show File;
-import 'package:firebase_web_app/pages/docx_editor_page.dart'; // Import de DocxEditorPage
+import 'package:firebase_web_app/pages/docx_editor_page.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -13,12 +11,11 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:pdf/pdf.dart';
 import 'package:printing/printing.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:provider/provider.dart';
 import '../services/ai_service.dart';
-import '../models/chat_message.dart';
 import '../models/folder.dart';
 import '../models/contact.dart';
 import '../models/document.dart';
-import '../widgets/document_form_dialog.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:archive/archive.dart';
 import 'package:http/http.dart' as http;
@@ -26,10 +23,18 @@ import 'package:universal_html/html.dart' as html;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
-import 'package:syncfusion_flutter_pdf/pdf.dart' as sf_pdf;
+import 'package:xml/xml.dart';
+import 'package:firebase_web_app/theme_provider.dart';
+
+// Extension pour capitalisation
+extension StringExtension on String {
+  String capitalize() {
+    return "${this[0].toUpperCase()}${substring(1).toLowerCase()}";
+  }
+}
 
 class DocumentPage extends StatefulWidget {
-  final String workspaceId; // Paramètre requis
+  final String workspaceId;
 
   const DocumentPage({
     Key? key,
@@ -45,48 +50,34 @@ class _DocumentPageState extends State<DocumentPage> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
-  late String workspaceId; // Stocke workspaceId
-  late String userId; // Stocke userId
+  late String workspaceId;
+  late String userId;
 
-  // Liste des dossiers
   List<Folder> _folders = [];
-
-  // Liste des documents du dossier sélectionné
   List<DocumentModel> _documents = [];
-
-  // Liste des contacts du dossier sélectionné
   List<Contact> _contacts = [];
-
-  // Liste des contacts disponibles (pour associer lors de la création d’un dossier)
   List<Contact> _availableContacts = [];
+  List<DocumentModel> _exampleDocuments = [];
 
-  // Dossier actuellement sélectionné
   Folder? _selectedFolder;
-
-  // ID du dossier actuellement sélectionné
   String? _selectedFolderId;
 
-  // Polices Roboto
   late pw.Font robotoRegular;
   late pw.Font robotoBold;
   bool _fontsLoaded = false;
 
-  // Ensemble des IDs des dossiers en cours de téléchargement
   final Set<String> _downloadingFolders = <String>{};
 
-  // Variable indiquant si un traitement est en cours
   bool _isProcessing = false;
 
-  // Abonnements Firestore
   StreamSubscription<QuerySnapshot>? _foldersSubscription;
   StreamSubscription<QuerySnapshot>? _documentsSubscription;
   StreamSubscription<QuerySnapshot>? _contactsSubscription;
   StreamSubscription<QuerySnapshot>? _availableContactsSubscription;
+  StreamSubscription<QuerySnapshot>? _exampleDocumentsSubscription;
 
-  // Formulaire d'ajout de contact
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
 
-  // Contrôleurs de texte pour le formulaire
   final TextEditingController _firstNameController = TextEditingController();
   final TextEditingController _lastNameController = TextEditingController();
   final TextEditingController _emailController = TextEditingController();
@@ -95,21 +86,30 @@ class _DocumentPageState extends State<DocumentPage> {
   final TextEditingController _companyController = TextEditingController();
   final TextEditingController _externalInfoController = TextEditingController();
 
+  final String _chatGptApiKey = "votre_clé_api";
+
+  Map<String, String> _globalMapping = {
+    "date": "27/12/2024",
+    "nom du contact": "Check&Consultzdd",
+    "numéro": "12.23.001z",
+    "adresse": "123 Rue Exemplez",
+    "email": "contact@example.com",
+  };
+
   @override
   void initState() {
     super.initState();
-    workspaceId = widget.workspaceId; // Initialisation de workspaceId
-    userId = _auth.currentUser?.uid ?? ''; // Initialisation de userId
+    debugPrint("Initialisation de DocumentPage pour workspaceId: ${widget.workspaceId}");
+    workspaceId = widget.workspaceId;
+    userId = _auth.currentUser?.uid ?? '';
+    debugPrint("Utilisateur connecté: $userId");
 
-    // Logs pour débogage
-    print('Initialisation de DocumentPage');
-    print('Workspace ID: $workspaceId');
-    print('User ID: $userId');
-
+    _loadGlobalMapping();
     _fetchFolders();
     _fetchAvailableContacts();
+    _fetchExampleDocuments();
     _loadFonts();
-    _listenToActions(); // Écoute des actions de l'IA
+    _listenToActions();
   }
 
   @override
@@ -118,8 +118,8 @@ class _DocumentPageState extends State<DocumentPage> {
     _documentsSubscription?.cancel();
     _contactsSubscription?.cancel();
     _availableContactsSubscription?.cancel();
+    _exampleDocumentsSubscription?.cancel();
 
-    // Dispose des contrôleurs
     _firstNameController.dispose();
     _lastNameController.dispose();
     _emailController.dispose();
@@ -131,34 +131,67 @@ class _DocumentPageState extends State<DocumentPage> {
     super.dispose();
   }
 
-  // Charger les polices Roboto
+  Future<void> _loadGlobalMapping() async {
+    try {
+      DocumentSnapshot snapshot = await _firestore
+          .collection('workspaces')
+          .doc(workspaceId)
+          .collection('settings')
+          .doc('globalMapping')
+          .get();
+      if (snapshot.exists) {
+        Map<String, dynamic> data = snapshot.data() as Map<String, dynamic>;
+        setState(() {
+          _globalMapping = {
+            "date": data["date"] ?? "27/12/2024",
+            "nom du contact": data["nom du contact"] ?? "Check&Consultzdd",
+            "numéro": data["numéro"] ?? "12.23.001z",
+            "adresse": data["adresse"] ?? "123 Rue Exemplez",
+            "email": data["email"] ?? "contact@example.com",
+          };
+          debugPrint("Mapping global chargé : $_globalMapping");
+        });
+      }
+    } catch (e) {
+      debugPrint("Erreur _loadGlobalMapping: $e");
+    }
+  }
+
+  Future<void> _saveGlobalMapping() async {
+    try {
+      await _firestore
+          .collection('workspaces')
+          .doc(workspaceId)
+          .collection('settings')
+          .doc('globalMapping')
+          .set(_globalMapping);
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Mapping global sauvegardé avec succès')));
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Erreur lors de la sauvegarde du mapping global')));
+    }
+  }
+
   Future<void> _loadFonts() async {
     try {
       final robotoRegularData = await rootBundle.load('assets/fonts/Roboto-Regular.ttf');
       final robotoBoldData = await rootBundle.load('assets/fonts/Roboto-Bold.ttf');
-
       robotoRegular = pw.Font.ttf(robotoRegularData.buffer.asByteData());
       robotoBold = pw.Font.ttf(robotoBoldData.buffer.asByteData());
-
-      if (mounted) {
-        setState(() {
-          _fontsLoaded = true;
-        });
-      }
-      print('Polices Roboto chargées avec succès');
+      setState(() {
+        _fontsLoaded = true;
+        debugPrint("Polices Roboto chargées avec succès");
+      });
     } catch (e) {
-      print('Erreur lors du chargement des polices: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Erreur lors du chargement des polices')),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Erreur lors du chargement des polices')));
+      debugPrint("Erreur _loadFonts: $e");
     }
   }
 
-  // Récupère les dossiers depuis Firestore (dans workspaces/{workspaceId}/folders)
   void _fetchFolders() {
-    print('Fetching folders for workspaceId: $workspaceId and userId: $userId');
+    debugPrint("Récupération des dossiers pour userId: $userId");
     _foldersSubscription = _firestore
         .collection('workspaces')
         .doc(workspaceId)
@@ -167,27 +200,25 @@ class _DocumentPageState extends State<DocumentPage> {
         .orderBy('timestamp', descending: true)
         .snapshots()
         .listen((snapshot) {
-      print('Fetched ${snapshot.docs.length} folders');
-      if (mounted) {
-        setState(() {
-          _folders = snapshot.docs.map((doc) => Folder.fromFirestore(doc)).toList();
-        });
-      }
-    }, onError: (error) {
-      print('Error fetching folders: $error');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Erreur lors de la récupération des dossiers')),
-        );
-      }
+      setState(() {
+        _folders = snapshot.docs.map((doc) => Folder.fromFirestore(doc)).toList();
+        debugPrint("Dossiers récupérés: ${_folders.length}");
+        if (_selectedFolderId != null) {
+          _selectedFolder = _folders.firstWhere(
+            (f) => f.id == _selectedFolderId,
+            orElse: () => _selectedFolder ?? _folders.first,
+          );
+          debugPrint("Dossier sélectionné mis à jour: ${_selectedFolder?.name}");
+        }
+      });
+    }, onError: (e) {
+      debugPrint("Erreur lors de la récupération des dossiers: $e");
     });
   }
 
-  // Récupère les documents d'un dossier spécifique (dans workspaces/{workspaceId}/documents)
   void _fetchDocuments(String folderId) {
-    print('Fetching documents for folderId: $folderId');
+    debugPrint("Récupération des documents pour folderId: $folderId");
     _documentsSubscription?.cancel();
-
     _documentsSubscription = _firestore
         .collection('workspaces')
         .doc(workspaceId)
@@ -196,55 +227,36 @@ class _DocumentPageState extends State<DocumentPage> {
         .orderBy('timestamp', descending: true)
         .snapshots()
         .listen((snapshot) {
-      print('Fetched ${snapshot.docs.length} documents for folderId: $folderId');
-      if (mounted) {
-        setState(() {
-          _documents = snapshot.docs.map((doc) => DocumentModel.fromFirestore(doc)).toList();
-        });
-      }
-    }, onError: (error) {
-      print('Error fetching documents: $error');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Erreur lors de la récupération des documents')),
-        );
-      }
+      setState(() {
+        _documents = snapshot.docs.map((doc) => DocumentModel.fromFirestore(doc)).toList();
+        debugPrint("Documents rechargés pour le dossier $folderId: ${_documents.length}");
+      });
+    }, onError: (e) {
+      debugPrint("Erreur lors de la récupération des documents: $e");
     });
   }
 
-  // Récupère les contacts d'un dossier spécifique (dans workspaces/{workspaceId}/contacts)
-  void _fetchContacts(String folderId) {
-    print('Fetching contacts for folderId: $folderId');
-    _contactsSubscription?.cancel();
-
-    _contactsSubscription = _firestore
+  void _fetchExampleDocuments() {
+    debugPrint("Récupération des documents exemples");
+    _exampleDocumentsSubscription = _firestore
         .collection('workspaces')
         .doc(workspaceId)
-        .collection('contacts')
-        .where('folderId', isEqualTo: folderId)
-        .where('userId', isEqualTo: userId)
+        .collection('documents')
+        .where('folderId', isEqualTo: "example")
         .orderBy('timestamp', descending: true)
         .snapshots()
         .listen((snapshot) {
-      print('Fetched ${snapshot.docs.length} contacts for folderId: $folderId');
-      if (mounted) {
-        setState(() {
-          _contacts = snapshot.docs.map((doc) => Contact.fromFirestore(doc)).toList();
-        });
-      }
-    }, onError: (error) {
-      print('Error fetching contacts: $error');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Erreur lors de la récupération des contacts')),
-        );
-      }
+      setState(() {
+        _exampleDocuments = snapshot.docs.map((doc) => DocumentModel.fromFirestore(doc)).toList();
+        debugPrint("Documents exemples récupérés: ${_exampleDocuments.length}");
+      });
+    }, onError: (e) {
+      debugPrint("Erreur lors de la récupération des documents exemples: $e");
     });
   }
 
-  // Récupère les contacts disponibles (dans workspaces/{workspaceId}/contacts)
   void _fetchAvailableContacts() {
-    print('Fetching available contacts for userId: $userId');
+    debugPrint("Récupération des contacts disponibles");
     _availableContactsSubscription = _firestore
         .collection('workspaces')
         .doc(workspaceId)
@@ -253,23 +265,35 @@ class _DocumentPageState extends State<DocumentPage> {
         .orderBy('timestamp', descending: true)
         .snapshots()
         .listen((snapshot) {
-      print('Fetched ${snapshot.docs.length} available contacts');
-      if (mounted) {
-        setState(() {
-          _availableContacts = snapshot.docs.map((doc) => Contact.fromFirestore(doc)).toList();
-        });
-      }
-    }, onError: (error) {
-      print('Error fetching available contacts: $error');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Erreur lors de la récupération des contacts disponibles')),
-        );
-      }
+      setState(() {
+        _availableContacts = snapshot.docs.map((doc) => Contact.fromFirestore(doc)).toList();
+        debugPrint("Contacts disponibles récupérés: ${_availableContacts.length}");
+      });
+    }, onError: (e) {
+      debugPrint("Erreur lors de la récupération des contacts: $e");
     });
   }
 
-  // Créer un nouveau dossier (dans workspaces/{workspaceId}/folders)
+  void _fetchContacts(String folderId) {
+    debugPrint("Récupération des contacts pour folderId: $folderId");
+    _contactsSubscription?.cancel();
+    _contactsSubscription = _firestore
+        .collection('workspaces')
+        .doc(workspaceId)
+        .collection('contacts')
+        .where('folderId', isEqualTo: folderId)
+        .orderBy('timestamp', descending: true)
+        .snapshots()
+        .listen((snapshot) {
+      setState(() {
+        _contacts = snapshot.docs.map((doc) => Contact.fromFirestore(doc)).toList();
+        debugPrint("Contacts rechargés pour le dossier $folderId: ${_contacts.length}");
+      });
+    }, onError: (e) {
+      debugPrint("Erreur lors de la récupération des contacts: $e");
+    });
+  }
+
   Future<void> _createFolder(String name, List<String> contactIds) async {
     try {
       DocumentReference folderRef = await _firestore
@@ -280,14 +304,11 @@ class _DocumentPageState extends State<DocumentPage> {
         'name': name,
         'userId': userId,
         'timestamp': FieldValue.serverTimestamp(),
+        'isClosed': false,
       });
-
       String newFolderId = folderRef.id;
-      print('Folder "$name" created with ID: $newFolderId');
-
       if (contactIds.isNotEmpty) {
         WriteBatch batch = _firestore.batch();
-
         for (String contactId in contactIds) {
           DocumentReference contactRef = _firestore
               .collection('workspaces')
@@ -295,362 +316,215 @@ class _DocumentPageState extends State<DocumentPage> {
               .collection('contacts')
               .doc(contactId);
           batch.update(contactRef, {'folderId': newFolderId});
-          print('Assigned contactId: $contactId to folderId: $newFolderId');
         }
-
         await batch.commit();
-        print('Batch update for contacts completed');
       }
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Dossier créé avec succès')),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Dossier créé avec succès')));
     } catch (e) {
-      print('Error creating folder: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Erreur lors de la création du dossier')),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Erreur lors de la création du dossier')));
+      debugPrint("Erreur _createFolder: $e");
     }
   }
 
-  // Soumettre le formulaire et ajouter un contact (dans workspaces/{workspaceId}/contacts)
-  Future<void> _submitForm() async {
-    if (_formKey.currentState!.validate()) {
-      String firstName = _firstNameController.text.trim();
-      String lastName = _lastNameController.text.trim();
-      String email = _emailController.text.trim();
-      String phone = _phoneController.text.trim();
-      String address = _addressController.text.trim();
-      String company = _companyController.text.trim();
-      String externalInfo = _externalInfoController.text.trim();
-
-      Contact newContact = Contact(
-        id: '',
-        userId: userId,
-        firstName: firstName,
-        lastName: lastName,
-        email: email,
-        phone: phone,
-        address: address,
-        company: company,
-        externalInfo: externalInfo,
-        folderId: _selectedFolderId ?? '',
-        timestamp: DateTime.now(),
-      );
-
-      try {
-        await _firestore
-            .collection('workspaces')
-            .doc(workspaceId)
-            .collection('contacts')
-            .add(newContact.toMap());
-
-        print('Contact ajouté: ${newContact.toMap()}');
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Contact ajouté avec succès')),
-        );
-
-        _formKey.currentState!.reset();
-        setState(() {
-          _selectedFolderId = null;
-          _selectedFolder = null;
-        });
-      } catch (e) {
-        print('Error adding contact: $e');
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Erreur lors de l\'ajout du contact')),
-        );
-      }
-    }
-  }
-
-  // Afficher un dialogue pour créer un nouveau dossier
-  void _showCreateFolderDialog() {
-    String folderName = '';
-    List<String> selectedContactIds = [];
-
-    showDialog(
-      context: context,
-      barrierDismissible: true,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Créer un Dossier'),
-          content: Container(
-            width: double.maxFinite,
-            constraints: BoxConstraints(
-              maxHeight: MediaQuery.of(context).size.height * 0.6,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  decoration: const InputDecoration(
-                    hintText: 'Nom du dossier',
-                    border: OutlineInputBorder(),
-                  ),
-                  onChanged: (value) {
-                    folderName = value;
-                  },
-                ),
-                const SizedBox(height: 20),
-                const Text(
-                  'Associer des Contacts (Optionnel)',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 10),
-                Expanded(
-                  child: _availableContacts.isNotEmpty
-                      ? ListView.builder(
-                          itemCount: _availableContacts.length,
-                          itemBuilder: (context, index) {
-                            final contact = _availableContacts[index];
-                            return CheckboxListTile(
-                              title: Text('${contact.firstName} ${contact.lastName}'),
-                              value: selectedContactIds.contains(contact.id),
-                              onChanged: (bool? value) {
-                                setState(() {
-                                  if (value == true) {
-                                    selectedContactIds.add(contact.id);
-                                  } else {
-                                    selectedContactIds.remove(contact.id);
-                                  }
-                                });
-                              },
-                            );
-                          },
-                        )
-                      : const Text('Aucun contact disponible.'),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Annuler'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                if (folderName.trim().isNotEmpty) {
-                  _createFolder(folderName.trim(), selectedContactIds);
-                  Navigator.of(context).pop();
-                } else {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Veuillez entrer un nom de dossier')),
-                  );
-                }
-              },
-              child: const Text('Créer'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  // Supprimer un contact (dans workspaces/{workspaceId}/contacts)
-  Future<void> _deleteContact(String contactId) async {
+  Future<void> _deleteFolder(String folderId) async {
     try {
+      debugPrint("Suppression du dossier: $folderId");
       await _firestore
           .collection('workspaces')
           .doc(workspaceId)
-          .collection('contacts')
-          .doc(contactId)
+          .collection('folders')
+          .doc(folderId)
           .delete();
+      WriteBatch batch = _firestore.batch();
+      QuerySnapshot contactsSnapshot = await _firestore
+          .collection('workspaces')
+          .doc(workspaceId)
+          .collection('contacts')
+          .where('folderId', isEqualTo: folderId)
+          .get();
+      for (var doc in contactsSnapshot.docs) {
+        batch.update(doc.reference, {'folderId': FieldValue.delete()});
+      }
+      await batch.commit();
+      WriteBatch deleteBatch = _firestore.batch();
+      QuerySnapshot documentsSnapshot = await _firestore
+          .collection('workspaces')
+          .doc(workspaceId)
+          .collection('documents')
+          .where('folderId', isEqualTo: folderId)
+          .get();
+      for (var doc in documentsSnapshot.docs) {
+        deleteBatch.delete(doc.reference);
+      }
+      await deleteBatch.commit();
+      if (_selectedFolder?.id == folderId) {
+        setState(() {
+          _selectedFolder = null;
+          _selectedFolderId = null;
+          _documents = [];
+          _contacts = [];
+          debugPrint("Dossier sélectionné supprimé, état réinitialisé");
+        });
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Dossier et contenus supprimés avec succès')));
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Erreur lors de la suppression du dossier')));
+      debugPrint("Erreur _deleteFolder: $e");
+    }
+  }
 
-      print('Contact supprimé: $contactId');
+ Future<void> _duplicateDocument(DocumentModel doc, String targetFolderId) async {
+  debugPrint("Utilisateur actuel : ${FirebaseAuth.instance.currentUser?.uid ?? 'Non authentifié'}");
+  try {
+    debugPrint("Duplication de '${doc.title}' (type: ${doc.type}) vers dossier $targetFolderId");
+    Uint8List? fileBytes;
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Contact supprimé avec succès')),
-        );
+    if (kIsWeb) {
+      final response = await http.get(Uri.parse(doc.url));
+      if (response.statusCode == 200) {
+        fileBytes = response.bodyBytes;
+      } else {
+        throw Exception("Erreur HTTP ${response.statusCode} lors de la récupération du fichier.");
+      }
+    } else {
+      final storageRef = FirebaseStorage.instance.refFromURL(doc.url);
+      fileBytes = await storageRef.getData();
+    }
+
+    if (fileBytes == null) {
+      throw Exception("Les données du fichier n'ont pas pu être récupérées (null).");
+    }
+    debugPrint("Fichier téléchargé, taille : ${fileBytes.length} octets");
+
+    if (doc.type.toLowerCase() == 'docx' && doc.linkMapping != null && doc.linkMapping!.isNotEmpty) {
+      Map<String, String> folderMapping = _selectedFolder?.folderMapping ?? _globalMapping;
+      debugPrint("Application du mapping pour duplication : $folderMapping");
+      fileBytes = _updateDocxPlaceholders(fileBytes, folderMapping, doc.linkMapping!);
+    }
+
+    final newFileName = "copy_${doc.title}";
+    final newStorageRef = FirebaseStorage.instance
+        .ref()
+        .child('documents/$targetFolderId/$newFileName');
+    await newStorageRef.putData(fileBytes);
+    final newFileUrl = await newStorageRef.getDownloadURL();
+    debugPrint("Nouveau fichier uploadé : $newFileUrl");
+
+    await _firestore.collection('workspaces').doc(workspaceId).collection('documents').add({
+      'title': doc.title,
+      'type': doc.type,
+      'url': newFileUrl,
+      'folderId': targetFolderId,
+      'linkMapping': doc.linkMapping ?? [],
+      'timestamp': FieldValue.serverTimestamp(),
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Document "${doc.title}" dupliqué dans le dossier cible.')));
+  } catch (e) {
+    debugPrint("Erreur duplication : $e");
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Erreur lors de la duplication du document: $e")));
+  }
+}
+
+  Uint8List _updateDocxPlaceholders(
+      Uint8List docxBytes, Map<String, String> folderMapping, List<String> linkSelections) {
+    debugPrint("=== _updateDocxPlaceholders (DocumentPage) ===");
+    debugPrint("folderMapping utilisé : $folderMapping");
+    debugPrint("linkSelections : $linkSelections");
+    Archive archive = ZipDecoder().decodeBytes(docxBytes);
+    Archive newArchive = Archive();
+    for (var file in archive.files) {
+      if (file.name == "word/document.xml") {
+        String xmlStr = utf8.decode(file.content as List<int>);
+        XmlDocument xmlDoc = XmlDocument.parse(xmlStr);
+        var paragraphs = xmlDoc.findAllElements('w:p').toList();
+        debugPrint("Nombre de paragraphes trouvés : ${paragraphs.length}");
+        for (var paragraph in paragraphs) {
+          var indexAttr = paragraph.getAttribute('data-docx-index');
+          if (indexAttr != null) {
+            int index = int.tryParse(indexAttr) ?? -1;
+            if (index >= 0 && index < linkSelections.length) {
+              String selectedLink = linkSelections[index].toLowerCase();
+              debugPrint("Traitement paragraphe #$index avec lien : '$selectedLink'");
+              if (selectedLink != "aucun") {
+                String? mappingValue = folderMapping[selectedLink];
+                if (mappingValue != null && mappingValue.isNotEmpty) {
+                  var textNodes = paragraph.findElements('w:t').toList();
+                  if (textNodes.isNotEmpty) {
+                    debugPrint("Mise à jour paragraphe #$index avec '$mappingValue'");
+                    textNodes.first.children
+                      ..clear()
+                      ..add(XmlText(mappingValue));
+                  } else {
+                    debugPrint("Aucun <w:t> trouvé dans paragraphe #$index");
+                  }
+                } else {
+                  debugPrint("Valeur vide ou absente pour '$selectedLink' dans folderMapping");
+                }
+              }
+            } else {
+              debugPrint("Index $index hors limites (taille linkSelections: ${linkSelections.length})");
+            }
+          }
+        }
+        String newXmlStr = xmlDoc.toXmlString();
+        List<int> newContent = utf8.encode(newXmlStr);
+        newArchive.addFile(ArchiveFile(file.name, newContent.length, newContent));
+      } else {
+        newArchive.addFile(file);
+      }
+    }
+    Uint8List result = Uint8List.fromList(ZipEncoder().encode(newArchive)!);
+    debugPrint("DOCX mis à jour, taille : ${result.length} octets");
+    return result;
+  }
+
+  Future<void> _deleteDocument(DocumentModel document) async {
+    try {
+      final storageRef = FirebaseStorage.instance.refFromURL(document.url);
+      await storageRef.delete();
+      await _firestore
+          .collection('workspaces')
+          .doc(workspaceId)
+          .collection('documents')
+          .doc(document.id)
+          .delete();
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Document supprimé avec succès')));
+      if (_selectedFolder != null) {
+        _fetchDocuments(_selectedFolder!.id);
+      } else {
+        _fetchExampleDocuments();
       }
     } catch (e) {
-      print('Error deleting contact: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Erreur lors de la suppression du contact')),
-        );
-      }
-    }
-  }
-
-  // Afficher les détails d'un contact
-  void _showContactDetails(Contact contact) {
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: Text('${contact.firstName} ${contact.lastName}'),
-          content: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (contact.email.isNotEmpty) Text('Email: ${contact.email}'),
-                const SizedBox(height: 8),
-                if (contact.phone.isNotEmpty) Text('Téléphone: ${contact.phone}'),
-                const SizedBox(height: 8),
-                if (contact.address.isNotEmpty) Text('Adresse: ${contact.address}'),
-                const SizedBox(height: 8),
-                if (contact.company.isNotEmpty) Text('Entreprise: ${contact.company}'),
-                const SizedBox(height: 8),
-                if (contact.externalInfo.isNotEmpty)
-                  Text('Informations Externes: ${contact.externalInfo}'),
-                const SizedBox(height: 8),
-                if (contact.folderId.isNotEmpty)
-                  FutureBuilder<DocumentSnapshot>(
-                    future: _firestore
-                        .collection('workspaces')
-                        .doc(workspaceId)
-                        .collection('folders')
-                        .doc(contact.folderId)
-                        .get(),
-                    builder: (context, snapshot) {
-                      if (snapshot.connectionState == ConnectionState.waiting) {
-                        return const Text('Dossier: Chargement...');
-                      }
-                      if (snapshot.hasError || !snapshot.hasData || !snapshot.data!.exists) {
-                        return const Text('Dossier: Inconnu');
-                      }
-                      final folder = Folder.fromFirestore(snapshot.data!);
-                      return Text('Dossier: ${folder.name}');
-                    },
-                  ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              child: const Text('Fermer'),
-              onPressed: () => Navigator.of(context).pop(),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  // Liste des contacts
-  Widget _buildContactList(List<Contact> contacts) {
-    if (contacts.isEmpty) {
-      return Text(
-        'Aucun contact dans ce dossier.',
-        style: GoogleFonts.roboto(fontSize: 14, color: Colors.grey[600]),
-      );
-    }
-
-    return ListView.builder(
-      shrinkWrap: true,
-      itemCount: contacts.length,
-      itemBuilder: (context, index) {
-        final contact = contacts[index];
-        return Card(
-          elevation: 2,
-          margin: const EdgeInsets.symmetric(vertical: 6.0),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12.0),
-          ),
-          child: ListTile(
-            leading: CircleAvatar(
-              backgroundColor: Colors.indigo[800],
-              child: Text(
-                contact.firstName.isNotEmpty ? contact.firstName[0].toUpperCase() : '?',
-                style: const TextStyle(color: Colors.white),
-              ),
-            ),
-            title: Text(
-              '${contact.firstName} ${contact.lastName}',
-              style: GoogleFonts.roboto(fontWeight: FontWeight.bold, color: Colors.black87),
-            ),
-            subtitle: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (contact.email.isNotEmpty) Text('Email: ${contact.email}'),
-                if (contact.phone.isNotEmpty) Text('Téléphone: ${contact.phone}'),
-                if (contact.company.isNotEmpty) Text('Entreprise: ${contact.company}'),
-              ],
-            ),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.delete, color: Colors.redAccent),
-                  onPressed: () {
-                    showDialog(
-                      context: context,
-                      builder: (context) => AlertDialog(
-                        title: const Text('Confirmer la suppression'),
-                        content: const Text('Êtes-vous sûr de vouloir supprimer ce contact?'),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.of(context).pop(),
-                            child: const Text('Annuler'),
-                          ),
-                          TextButton(
-                            onPressed: () {
-                              Navigator.of(context).pop();
-                              _deleteContact(contact.id);
-                            },
-                            child: const Text('Supprimer'),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-                IconButton(
-                  icon: const Icon(Icons.info_outline, color: Colors.blue),
-                  onPressed: () {
-                    _showContactDetails(contact);
-                  },
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  // Générer un document via l'IA -> crée un DOCX
-  Future<void> _generateDocument(String title, String content) async {
-    final enrichedContent = content;
-    await _createDocxDocument(title, enrichedContent);
-
-    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Document généré avec succès')),
-      );
+          SnackBar(content: Text('Erreur lors de la suppression du document: $e')));
+      debugPrint("Erreur _deleteDocument: $e");
     }
   }
 
-  // Créer un document DOCX (dans workspaces/{workspaceId}/documents)
+  Future<void> _generateDocument(String title, String content) async {
+    await _createDocxDocument(title, content);
+    ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Document généré avec succès')));
+  }
+
   Future<void> _createDocxDocument(String title, String content) async {
     if (!_fontsLoaded) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Les polices ne sont pas encore chargées. Veuillez réessayer.')),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Les polices ne sont pas encore chargées. Veuillez réessayer.')));
       return;
     }
-
-    if (_selectedFolder == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Dossier non sélectionné.')),
-      );
-      return;
-    }
-
     try {
-      // Utilisation de l'API ConvertAPI pour créer un DOCX à partir d'un TXT
-      const convertApiUrl = 'https://v2.convertapi.com/convert/txt/to/docx?Secret=secret_jPYJFfijH2cj3g8h';
-
+      debugPrint("Création d'un DOCX via ConvertApi");
+      const convertApiUrl =
+          'https://v2.convertapi.com/convert/txt/to/docx?Secret=secret_jPYJFfijH2cj3g8h';
       final response = await http.post(
         Uri.parse(convertApiUrl),
         headers: {'Content-Type': 'application/json'},
@@ -661,12 +535,9 @@ class _DocumentPageState extends State<DocumentPage> {
               'Name': 'document.txt',
             },
           ],
-          'Parameters': {
-            'File': 'document.txt',
-          },
+          'Parameters': {'File': 'document.txt'},
         }),
       );
-
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         final docxUrl = data['Files']?[0]?['Url'];
@@ -674,15 +545,12 @@ class _DocumentPageState extends State<DocumentPage> {
           final docxResponse = await http.get(Uri.parse(docxUrl));
           if (docxResponse.statusCode == 200) {
             final docxBytes = docxResponse.bodyBytes;
-
-            // Uploader sur Firebase Storage
+            String folderId = _selectedFolder?.id ?? "example";
             final storageRef = FirebaseStorage.instance
                 .ref()
-                .child('documents/${_selectedFolder!.id}/$title.docx');
+                .child('documents/$folderId/$title.docx');
             await storageRef.putData(docxBytes);
             final downloadURL = await storageRef.getDownloadURL();
-
-            // Enregistrer dans Firestore
             await _firestore
                 .collection('workspaces')
                 .doc(workspaceId)
@@ -691,14 +559,14 @@ class _DocumentPageState extends State<DocumentPage> {
               'title': title,
               'type': 'docx',
               'url': downloadURL,
-              'folderId': _selectedFolder!.id,
+              'folderId': folderId,
+              'linkMapping': [],
               'timestamp': FieldValue.serverTimestamp(),
             });
-
-            print('Document "$title.docx" créé et uploadé avec succès');
-
-            // Rafraîchir la liste des documents
-            _fetchDocuments(_selectedFolder!.id);
+            if (_selectedFolder != null) {
+              _fetchDocuments(_selectedFolder!.id);
+            }
+            debugPrint("Document DOCX créé et uploadé: $downloadURL");
           } else {
             throw Exception('Erreur lors du téléchargement du DOCX.');
           }
@@ -709,89 +577,65 @@ class _DocumentPageState extends State<DocumentPage> {
         throw Exception('Erreur lors de la création du DOCX: ${response.statusCode}');
       }
     } catch (e) {
-      print('Error creating DOCX document: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Erreur lors de la création du document DOCX')),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Erreur lors de la création du document DOCX')));
+      debugPrint("Erreur _createDocxDocument: $e");
     }
   }
 
-  // Télécharger un fichier
   Future<void> _downloadFile(String url, String fileName, String type) async {
     try {
-      final anchor = html.AnchorElement(href: url)
+      final downloadUrl = "$url?ts=${DateTime.now().millisecondsSinceEpoch}";
+      debugPrint("Téléchargement de $fileName => $downloadUrl");
+      final anchor = html.AnchorElement(href: downloadUrl)
         ..setAttribute("download", '$fileName.$type')
         ..click();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Fichier téléchargé avec succès')),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Fichier téléchargé avec succès')));
     } catch (e) {
-      print('Error downloading file: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Erreur lors du téléchargement du fichier')),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Erreur lors du téléchargement du fichier')));
+      debugPrint("Erreur _downloadFile: $e");
     }
   }
 
-  // Télécharger un dossier entier sous forme de ZIP
   Future<void> _downloadFolder(Folder folder) async {
     setState(() {
       _downloadingFolders.add(folder.id);
     });
-
     try {
-      // Récupérer documents
       QuerySnapshot snapshot = await _firestore
           .collection('workspaces')
           .doc(workspaceId)
           .collection('documents')
           .where('folderId', isEqualTo: folder.id)
           .get();
-
-      // Récupérer contacts
       QuerySnapshot contactSnapshot = await _firestore
           .collection('workspaces')
           .doc(workspaceId)
           .collection('contacts')
           .where('folderId', isEqualTo: folder.id)
           .get();
-
       if (snapshot.docs.isEmpty && contactSnapshot.docs.isEmpty) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Le dossier est vide. Aucun fichier à télécharger.')),
-          );
-        }
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Le dossier est vide. Aucun fichier à télécharger.')));
         return;
       }
-
       Archive archive = Archive();
-
-      // Ajouter les documents
       for (var doc in snapshot.docs) {
         String url = doc['url'] ?? '';
         String title = doc['title'] ?? 'Sans titre';
         String type = doc['type'] ?? 'pdf';
         if (url.isEmpty) continue;
-
         http.Response response = await http.get(Uri.parse(url));
         if (response.statusCode == 200) {
           List<int> bytes = response.bodyBytes;
-          String fileName = '$title.${type.toLowerCase()}';
-          archive.addFile(ArchiveFile(fileName, bytes.length, bytes));
-          print('Ajout du fichier "$fileName" au ZIP');
+          String fName = '$title.${type.toLowerCase()}';
+          archive.addFile(ArchiveFile(fName, bytes.length, bytes));
         }
       }
-
-      // Ajouter les contacts sous forme de JSON
       for (var contactDoc in contactSnapshot.docs) {
-        Contact contact = Contact.fromFirestore(contactDoc);
+        final contact = Contact.fromFirestore(contactDoc);
         Map<String, dynamic> contactMap = {
           'firstName': contact.firstName,
           'lastName': contact.lastName,
@@ -804,65 +648,40 @@ class _DocumentPageState extends State<DocumentPage> {
           'timestamp': contact.timestamp.toIso8601String(),
         };
         String contactJson = jsonEncode(contactMap);
-        String fileName = '${contact.firstName}_${contact.lastName}.json';
-        archive.addFile(ArchiveFile(fileName, contactJson.length, utf8.encode(contactJson)));
-        print('Ajout du contact "$fileName" au ZIP');
+        String fName = '${contact.firstName}_${contact.lastName}.json';
+        archive.addFile(ArchiveFile(fName, contactJson.length, utf8.encode(contactJson)));
       }
-
       List<int> zipData = ZipEncoder().encode(archive)!;
       Uint8List zipBytes = Uint8List.fromList(zipData);
-
       final blob = html.Blob([zipBytes], 'application/zip');
       final urlObject = html.Url.createObjectUrlFromBlob(blob);
-
       final anchor = html.AnchorElement(href: urlObject)
         ..setAttribute("download", '${folder.name}.zip')
         ..click();
-
       html.Url.revokeObjectUrl(urlObject);
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Dossier "${folder.name}" téléchargé avec succès.')),
-        );
-      }
-      print('Dossier "${folder.name}" téléchargé avec succès');
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Dossier "${folder.name}" téléchargé avec succès.')));
     } catch (e) {
-      print('Error downloading folder: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Erreur lors du téléchargement du dossier.')),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Erreur lors du téléchargement du dossier.')));
+      debugPrint("Erreur _downloadFolder: $e");
     } finally {
-      if (mounted) {
-        setState(() {
-          _downloadingFolders.remove(folder.id);
-        });
-      }
+      setState(() {
+        _downloadingFolders.remove(folder.id);
+      });
     }
   }
 
-  // Importer un document
   Future<void> _importDocument() async {
-    if (_selectedFolder == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Veuillez sélectionner un dossier')),
-      );
-      return;
-    }
-
     try {
       FilePickerResult? result = await FilePicker.platform.pickFiles(
         allowMultiple: false,
         type: FileType.custom,
         allowedExtensions: ['pdf', 'txt', 'docx'],
       );
-
       if (result != null) {
         String fileName = result.files.single.name;
         Uint8List? fileBytes = result.files.single.bytes;
-
         if (fileBytes == null && !kIsWeb) {
           String? path = result.files.single.path;
           if (path != null) {
@@ -870,31 +689,51 @@ class _DocumentPageState extends State<DocumentPage> {
             fileBytes = await file.readAsBytes();
           }
         }
-
         if (fileBytes == null || fileBytes.isEmpty) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Erreur lors de la lecture du fichier.')),
-            );
-          }
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Erreur lors de la lecture du fichier.')));
           return;
         }
-
         String fileType = fileName.split('.').last.toLowerCase();
         if (fileType != 'pdf' && fileType != 'txt' && fileType != 'docx') {
           fileType = 'other';
         }
-
-        // Si docx
+        String folderId = _selectedFolder?.id ?? "example";
         if (fileType == 'docx') {
-          await _processDocxImport(fileBytes, fileName);
-        } else {
-          try {
-            final storageRef = FirebaseStorage.instance
+          Map<String, String> mappingToUse = _selectedFolder?.folderMapping ?? _globalMapping;
+          debugPrint("Importation DOCX avec mapping: $mappingToUse");
+          final resultMap = await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => DocxEditorPage(
+                docxBytes: fileBytes!,
+                chatGptApiKey: _chatGptApiKey,
+                returnModifiedBytes: true,
+                customMapping: mappingToUse,
+                documentId: "new_document",
+                workspaceId: workspaceId,
+              ),
+            ),
+          );
+          if (resultMap != null &&
+              resultMap is Map &&
+              resultMap["docxBytes"] != null &&
+              resultMap["docxBytes"] is Uint8List &&
+              resultMap["linkMapping"] != null &&
+              resultMap["linkMapping"] is List<String>) {
+            final modifiedBytes = resultMap["docxBytes"] as Uint8List;
+            final linkMapping = resultMap["linkMapping"] as List<String>;
+            final originalStorageRef = FirebaseStorage.instance
                 .ref()
-                .child('documents/${_selectedFolder!.id}/$fileName');
-            await storageRef.putData(fileBytes);
-            final fileUrl = await storageRef.getDownloadURL();
+                .child('documents/$folderId/original_$fileName');
+            await originalStorageRef.putData(fileBytes);
+            final originalUrl = await originalStorageRef.getDownloadURL();
+
+            final modifiedStorageRef = FirebaseStorage.instance
+                .ref()
+                .child('documents/$folderId/$fileName');
+            await modifiedStorageRef.putData(modifiedBytes);
+            final fileUrl = await modifiedStorageRef.getDownloadURL();
 
             await _firestore
                 .collection('workspaces')
@@ -904,337 +743,157 @@ class _DocumentPageState extends State<DocumentPage> {
               'title': fileName,
               'type': fileType,
               'url': fileUrl,
-              'folderId': _selectedFolder!.id,
+              'originalUrl': originalUrl,
+              'folderId': folderId,
+              'linkMapping': linkMapping,
               'timestamp': FieldValue.serverTimestamp(),
             });
-
-            print('Document "$fileName" importé avec succès');
-
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Document importé avec succès')),
-              );
-            }
-          } catch (e) {
-            print('Error importing document: $e');
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Erreur lors de l\'importation du document')),
-              );
-            }
+            ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Document importé et modifié avec succès')));
+            debugPrint("Document DOCX importé: $fileUrl");
           }
-        }
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Aucun fichier sélectionné.')),
-          );
-        }
-      }
-    } catch (e) {
-      print('Error importing document: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Erreur lors de l\'importation du document')),
-        );
-      }
-    }
-  }
-
-  // Traiter l'importation d'un DOCX
-  Future<void> _processDocxImport(Uint8List docxBytes, String fileName) async {
-    setState(() {
-      _isProcessing = true;
-    });
-
-    try {
-      final archive = ZipDecoder().decodeBytes(docxBytes);
-      final documentFile = archive.files.firstWhere(
-        (file) => file.name == 'word/document.xml',
-        orElse: () => throw Exception('document.xml non trouvé dans le DOCX.'),
-      );
-      String documentXml = String.fromCharCodes(documentFile.content as List<int>);
-
-      final regex = RegExp(r'{{(.*?)}}');
-      final matches = regex.allMatches(documentXml).toList();
-
-      if (matches.isEmpty) {
-        throw Exception('Aucune variable valide trouvée dans le document.');
-      }
-
-      final variables = matches
-          .map((match) => match.group(1)!)
-          .map((variable) => variable.replaceAll(RegExp(r'<[^>]*>'), '').trim())
-          .toSet()
-          .toList();
-
-      Map<String, String> fieldValues = {};
-      for (var variable in variables) {
-        final docSnapshot = await _firestore
-            .collection('workspaces')
-            .doc(workspaceId)
-            .collection('variables')
-            .doc(variable)
-            .get();
-
-        if (docSnapshot.exists && docSnapshot.data()!.containsKey('value')) {
-          fieldValues[variable] = docSnapshot['value'] ?? '';
         } else {
-          fieldValues[variable] = 'Valeur manquante';
-        }
-      }
-
-      fieldValues.forEach((key, value) {
-        documentXml = documentXml.replaceAll('{{$key}}', value);
-      });
-
-      final remainingMatches = regex.allMatches(documentXml).toList();
-      if (remainingMatches.isNotEmpty) {
-        debugPrint('Certaines variables n\'ont pas pu être remplacées: $remainingMatches');
-      }
-
-      final updatedDocumentFile = ArchiveFile(
-        'word/document.xml',
-        documentXml.length,
-        utf8.encode(documentXml),
-      );
-
-      final updatedArchive = Archive();
-      for (var file in archive.files) {
-        if (file.name != 'word/document.xml') {
-          updatedArchive.addFile(file);
-        }
-      }
-      updatedArchive.addFile(updatedDocumentFile);
-
-      final updatedDocxBytes = ZipEncoder().encode(updatedArchive)!;
-
-      final storageRef = FirebaseStorage.instance
-          .ref()
-          .child('documents/${_selectedFolder!.id}/modified_$fileName.docx');
-      await storageRef.putData(Uint8List.fromList(updatedDocxBytes));
-      final downloadURL = await storageRef.getDownloadURL();
-
-      await _firestore
-          .collection('workspaces')
-          .doc(workspaceId)
-          .collection('documents')
-          .add({
-        'title': 'Modified $fileName',
-        'type': 'docx',
-        'url': downloadURL,
-        'folderId': _selectedFolder!.id,
-        'timestamp': FieldValue.serverTimestamp(),
-      });
-
-      print('DOCX modifié et uploadé avec succès');
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('DOCX modifié et uploadé avec succès')),
-        );
-      }
-      _fetchDocuments(_selectedFolder!.id);
-    } catch (e) {
-      print('Error processing DOCX import: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erreur lors du traitement du DOCX: $e')),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isProcessing = false;
-        });
-      }
-    }
-  }
-
-  // Dialogue pour créer un nouveau document
-  void _showCreateDocumentDialog() {
-    if (_selectedFolder == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Veuillez sélectionner un dossier avant de créer un document.')),
-      );
-      return;
-    }
-
-    String documentTitle = '';
-    String documentContent = '';
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Créer un Nouveau Document'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              decoration: const InputDecoration(
-                hintText: 'Titre du document',
-                border: OutlineInputBorder(),
-              ),
-              onChanged: (value) {
-                documentTitle = value;
-              },
-            ),
-            const SizedBox(height: 20),
-            TextField(
-              decoration: const InputDecoration(
-                hintText: 'Contenu du document',
-                border: OutlineInputBorder(),
-              ),
-              maxLines: 5,
-              onChanged: (value) {
-                documentContent = value;
-              },
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Annuler'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              if (documentTitle.trim().isNotEmpty && documentContent.trim().isNotEmpty) {
-                _generateDocument(documentTitle.trim(), documentContent.trim());
-                Navigator.of(context).pop();
-              }
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.indigo[800],
-            ),
-            child: const Text('Créer'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Dialogue pour importer un document
-  void _showImportDocumentDialog() {
-    if (_selectedFolder == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Veuillez sélectionner un dossier avant d\'importer un document.')),
-      );
-      return;
-    }
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Importer un Document'),
-        content: const Text('Sélectionnez un fichier à importer'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Annuler'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              _importDocument();
-              Navigator.of(context).pop();
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.green,
-            ),
-            child: const Text('Importer'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Exemple depuis un DOCX via DocxEditorPage
-  Future<void> _showExampleFromDocxDialog() async {
-    // Ouvre le sélecteur de fichiers pour les DOCX
-    FilePickerResult? result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['docx'],
-    );
-
-    if (result != null) {
-      Uint8List? fileBytes = result.files.single.bytes;
-      if (fileBytes == null && result.files.single.path != null) {
-        File file = File(result.files.single.path!);
-        fileBytes = await file.readAsBytes();
-      }
-
-      if (fileBytes != null && fileBytes.isNotEmpty) {
-        try {
-          final Uint8List nonNullFileBytes = fileBytes;
-          final modifiedDocxBytes = await Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => DocxEditorPage(docxBytes: nonNullFileBytes),
-            ),
-          );
-
-          if (modifiedDocxBytes != null && modifiedDocxBytes is Uint8List) {
+          try {
             final storageRef = FirebaseStorage.instance
                 .ref()
-                .child('documents/${_selectedFolder!.id}/example_modified.docx');
-            await storageRef.putData(modifiedDocxBytes);
-            final newDownloadURL = await storageRef.getDownloadURL();
-
+                .child('documents/$folderId/$fileName');
+            await storageRef.putData(fileBytes);
+            final fileUrl = await storageRef.getDownloadURL();
             await _firestore
                 .collection('workspaces')
                 .doc(workspaceId)
                 .collection('documents')
                 .add({
-              'title': 'Example Modified',
-              'type': 'docx',
-              'url': newDownloadURL,
-              'folderId': _selectedFolder!.id,
+              'title': fileName,
+              'type': fileType,
+              'url': fileUrl,
+              'folderId': folderId,
               'timestamp': FieldValue.serverTimestamp(),
             });
-
-            print('DOCX modifié et uploadé avec succès');
-
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('DOCX modifié et uploadé avec succès')),
-              );
-            }
-            _fetchDocuments(_selectedFolder!.id);
+            ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Document importé avec succès')));
+            debugPrint("Document non-DOCX importé: $fileUrl");
+          } catch (e) {
+            ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Erreur lors de l\'importation du document')));
+            debugPrint("Erreur _importDocument (non-DOCX): $e");
           }
-        } catch (e) {
-          print('Error editing DOCX: $e');
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Erreur lors de l\'édition du DOCX: $e')),
-          );
         }
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Impossible de lire le fichier DOCX sélectionné.')),
+            const SnackBar(content: Text('Aucun fichier sélectionné.')));
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erreur lors de l\'importation du document: $e')));
+      debugPrint("Erreur _importDocument: $e");
+    }
+  }
+
+  Future<void> _showExampleFromDocxDialog() async {
+    FilePickerResult? result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['docx'],
+    );
+    if (result != null) {
+      Uint8List fileBytes = result.files.single.bytes ??
+          (result.files.single.path != null
+              ? await File(result.files.single.path!).readAsBytes()
+              : Uint8List(0));
+      if (fileBytes.isEmpty) return;
+      try {
+        Map<String, String> mappingToUse = _selectedFolder?.folderMapping ?? _globalMapping;
+        debugPrint("Exemple DOCX avec mapping: $mappingToUse");
+        final resultMap = await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => DocxEditorPage(
+              docxBytes: fileBytes,
+              chatGptApiKey: _chatGptApiKey,
+              returnModifiedBytes: true,
+              customMapping: mappingToUse,
+              documentId: "new_document",
+              workspaceId: workspaceId,
+            ),
+          ),
         );
+        if (resultMap != null &&
+            resultMap is Map &&
+            resultMap["docxBytes"] != null &&
+            resultMap["docxBytes"] is Uint8List &&
+            resultMap["linkMapping"] != null &&
+            resultMap["linkMapping"] is List<String>) {
+          String folderId = _selectedFolder?.id ?? "example";
+          final modifiedBytes = resultMap["docxBytes"] as Uint8List;
+          final linkMapping = resultMap["linkMapping"] as List<String>;
+          final storageRef = FirebaseStorage.instance
+              .ref()
+              .child('documents/$folderId/example_modified.docx');
+          await storageRef.putData(modifiedBytes);
+          final newDownloadURL = await storageRef.getDownloadURL();
+          await _firestore
+              .collection('workspaces')
+              .doc(workspaceId)
+              .collection('documents')
+              .add({
+            'title': 'Example Modified',
+            'type': 'docx',
+            'url': newDownloadURL,
+            'folderId': folderId,
+            'linkMapping': linkMapping,
+            'timestamp': FieldValue.serverTimestamp(),
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('DOCX exemple modifié et sauvegardé avec succès')));
+          if (_selectedFolder != null) {
+            _fetchDocuments(_selectedFolder!.id);
+          }
+          debugPrint("Exemple DOCX modifié: $newDownloadURL");
+        }
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Erreur lors de l\'édition du DOCX: $e')));
+        debugPrint("Erreur _showExampleFromDocxDialog: $e");
       }
     }
   }
 
-  // Édition d'un DOCX déjà dans Firestore
   Future<void> _editDocx(DocumentModel document) async {
     try {
-      final response = await http.get(Uri.parse(document.url));
+      final urlToLoad = document.url.isNotEmpty ? document.url : (document.originalUrl ?? "");
+      debugPrint("Édition du DOCX, chargement URL : $urlToLoad");
+      final response = await http.get(Uri.parse(urlToLoad));
       if (response.statusCode == 200) {
         final docxBytes = response.bodyBytes;
-
-        final modifiedDocxBytes = await Navigator.push(
+        List<String>? savedMapping = document.linkMapping != null ? List<String>.from(document.linkMapping!) : null;
+        Map<String, String> mappingToUse = _selectedFolder?.folderMapping ?? _globalMapping;
+        debugPrint("Mapping transmis à DocxEditorPage : $mappingToUse");
+        debugPrint("linkMapping sauvegardé : $savedMapping");
+        final resultMap = await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (context) => DocxEditorPage(docxBytes: docxBytes),
+            builder: (context) => DocxEditorPage(
+              docxBytes: docxBytes,
+              chatGptApiKey: _chatGptApiKey,
+              returnModifiedBytes: true,
+              customMapping: mappingToUse,
+              savedLinkMapping: savedMapping,
+              documentId: document.id,
+              workspaceId: workspaceId,
+            ),
           ),
         );
-
-        if (modifiedDocxBytes != null && modifiedDocxBytes is Uint8List) {
+        if (resultMap != null &&
+            resultMap["docxBytes"] is Uint8List &&
+            resultMap["linkMapping"] is List<String>) {
+          final modifiedBytes = resultMap["docxBytes"] as Uint8List;
+          final linkMapping = resultMap["linkMapping"] as List<String>;
           final storageRef = FirebaseStorage.instance
               .ref()
-              .child('documents/${_selectedFolder!.id}/${document.title}.docx');
-          await storageRef.putData(modifiedDocxBytes);
+              .child('documents/${document.folderId}/${document.title}.docx');
+          await storageRef.putData(modifiedBytes);
           final newDownloadURL = await storageRef.getDownloadURL();
-
+          debugPrint("DOCX modifié uploadé : $newDownloadURL");
           await _firestore
               .collection('workspaces')
               .doc(workspaceId)
@@ -1242,31 +901,25 @@ class _DocumentPageState extends State<DocumentPage> {
               .doc(document.id)
               .update({
             'url': newDownloadURL,
+            'linkMapping': linkMapping,
             'timestamp': FieldValue.serverTimestamp(),
           });
-
-          print('DOCX modifié et mis à jour avec succès');
-
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('DOCX modifié et mis à jour avec succès')),
-            );
-          }
-          _fetchDocuments(_selectedFolder!.id);
+          if (_selectedFolder != null) _fetchDocuments(_selectedFolder!.id);
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('DOCX modifié et mis à jour avec succès')));
         }
       } else {
-        throw Exception('Impossible de télécharger le DOCX');
+        throw Exception("Erreur lors du chargement du DOCX : ${response.statusCode}");
       }
     } catch (e) {
-      print('Error editing DOCX: $e');
+      debugPrint("Erreur édition DOCX : $e");
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Erreur lors de l\'ouverture du DOCX')),
-      );
+          SnackBar(content: Text('Erreur lors de l\'édition du DOCX: $e')));
     }
   }
 
-  // Écoute les actions de l'IA depuis Firestore
   void _listenToActions() {
+    debugPrint("Écoute des actions pour userId: $userId");
     _firestore
         .collection('workspaces')
         .doc(workspaceId)
@@ -1282,353 +935,694 @@ class _DocumentPageState extends State<DocumentPage> {
           }
         }
       }
-    }, onError: (error) {
-      print('Error listening to actions: $error');
+    }, onError: (e) {
+      debugPrint("Erreur lors de l'écoute des actions: $e");
     });
   }
 
-  // Gère les actions reçues de l'IA
   void _handleAction(Map<String, dynamic> actionData) async {
     final action = actionData['action'];
     final data = actionData['data'];
-
-    print('Action détectée: $action');
-
+    debugPrint("Action reçue: $action, données: $data");
     switch (action) {
-      case 'create_folder_with_document':
+      case 'create_folder_and_add_contact':
         final folderName = data['folderName'];
         final document = data['document'];
         final documentTitle = document['title'];
         final documentContent = document['content'];
-
         await _createFolder(folderName, []).then((_) {
           if (_folders.isNotEmpty) {
-            final latestFolder = _folders.first;
             _createDocxDocument(documentTitle, documentContent);
           }
         });
         break;
-
-      // D'autres actions peuvent être ajoutées ici
-
       default:
-        print('Action inconnue: $action');
+        debugPrint("Action non reconnue: $action");
+        break;
     }
   }
 
-  // UI PRINCIPALE
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Gestion des Documents'),
-        backgroundColor: Colors.indigo[800],
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.create_new_folder),
-            tooltip: 'Créer un dossier',
-            onPressed: _showCreateFolderDialog,
+  Future<void> _showMappingGlobalDialog() async {
+    await showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: Theme.of(context).cardColor,
+          title: Text(
+            "Modifier Mapping global",
+            style: Theme.of(context).textTheme.titleLarge,
           ),
-        ],
-      ),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            children: [
-              // Carte pour ajouter/importer des documents
-              Card(
-                elevation: 4,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                color: Colors.white,
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Ajouter un Nouveau Document',
-                        style: GoogleFonts.roboto(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.indigo[800],
-                        ),
-                      ),
-                      const SizedBox(height: 20),
-                      ElevatedButton(
-                        onPressed: _showCreateDocumentDialog,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.indigo[800],
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(30),
-                          ),
-                        ),
-                        child: Text(
-                          'Créer Document',
-                          style: GoogleFonts.roboto(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 20),
-                      ElevatedButton(
-                        onPressed: _showImportDocumentDialog,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(30),
-                          ),
-                        ),
-                        child: Text(
-                          'Importer Document',
-                          style: GoogleFonts.roboto(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 20),
-                      ElevatedButton(
-                        onPressed: _showExampleFromDocxDialog,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.orange,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(30),
-                          ),
-                        ),
-                        child: Text(
-                          'Prendre Exemple sur un DOCX',
-                          style: GoogleFonts.roboto(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
-                    ],
+          content: SingleChildScrollView(
+            child: Column(
+              children: [
+                TextField(
+                  controller: TextEditingController(text: _globalMapping["date"]),
+                  style: Theme.of(context).textTheme.bodyMedium,
+                  decoration: InputDecoration(
+                    labelText: "Date",
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    filled: true,
+                    fillColor: Theme.of(context).dividerColor?.withOpacity(0.2),
                   ),
+                  onChanged: (value) {
+                    _globalMapping["date"] = value.trim();
+                  },
                 ),
-              ),
-              const SizedBox(height: 30),
-              Text(
-                'Dossiers Existants',
-                style: GoogleFonts.roboto(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.indigo[800],
+                SizedBox(height: 12),
+                TextField(
+                  controller: TextEditingController(text: _globalMapping["nom du contact"]),
+                  style: Theme.of(context).textTheme.bodyMedium,
+                  decoration: InputDecoration(
+                    labelText: "Nom du contact",
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    filled: true,
+                    fillColor: Theme.of(context).dividerColor?.withOpacity(0.2),
+                  ),
+                  onChanged: (value) {
+                    _globalMapping["nom du contact"] = value.trim();
+                  },
                 ),
-              ),
-              const SizedBox(height: 10),
-              Expanded(
-                child: Row(
-                  children: [
-                    // Liste des dossiers
-                    Expanded(
-                      flex: 1,
-                      child: _buildFolderList(),
-                    ),
-                    const SizedBox(width: 20),
-                    // Contenu du dossier sélectionné
-                    Expanded(
-                      flex: 2,
-                      child: _selectedFolder != null
-                          ? _buildSelectedFolderContent()
-                          : Center(
-                              child: Text(
-                                'Sélectionnez un dossier pour voir son contenu.',
-                                style: GoogleFonts.roboto(
-                                  fontSize: 16,
-                                  color: Colors.grey[600],
-                                ),
-                              ),
-                            ),
-                    ),
-                  ],
+                SizedBox(height: 12),
+                TextField(
+                  controller: TextEditingController(text: _globalMapping["numéro"]),
+                  style: Theme.of(context).textTheme.bodyMedium,
+                  decoration: InputDecoration(
+                    labelText: "Numéro",
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    filled: true,
+                    fillColor: Theme.of(context).dividerColor?.withOpacity(0.2),
+                  ),
+                  onChanged: (value) {
+                    _globalMapping["numéro"] = value.trim();
+                  },
                 ),
-              ),
-            ],
+                SizedBox(height: 12),
+                TextField(
+                  controller: TextEditingController(text: _globalMapping["adresse"]),
+                  style: Theme.of(context).textTheme.bodyMedium,
+                  decoration: InputDecoration(
+                    labelText: "Adresse",
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    filled: true,
+                    fillColor: Theme.of(context).dividerColor?.withOpacity(0.2),
+                  ),
+                  onChanged: (value) {
+                    _globalMapping["adresse"] = value.trim();
+                  },
+                ),
+                SizedBox(height: 12),
+                TextField(
+                  controller: TextEditingController(text: _globalMapping["email"]),
+                  style: Theme.of(context).textTheme.bodyMedium,
+                  decoration: InputDecoration(
+                    labelText: "Email",
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    filled: true,
+                    fillColor: Theme.of(context).dividerColor?.withOpacity(0.2),
+                  ),
+                  onChanged: (value) {
+                    _globalMapping["email"] = value.trim();
+                  },
+                ),
+              ],
+            ),
           ),
-        ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _showCreateFolderDialog,
-        tooltip: 'Créer un dossier',
-        backgroundColor: Colors.indigo[800],
-        child: const Icon(Icons.create_new_folder),
-      ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text("Annuler", style: Theme.of(context).textTheme.bodyMedium),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                Navigator.pop(context);
+                await _saveGlobalMapping();
+              },
+              child: Text(
+                "Enregistrer",
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.white),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 
-  // Liste des Dossiers
-  Widget _buildFolderList() {
-    if (_folders.isEmpty) {
-      return Center(
-        child: Text(
-          'Aucun dossier trouvé.',
-          style: GoogleFonts.roboto(
-            fontSize: 16,
-            color: Colors.grey[600],
-          ),
-        ),
-      );
+  Future<void> _showFolderMappingDialog() async {
+    if (_selectedFolder == null) {
+      debugPrint("Aucun dossier sélectionné pour modifier le mapping.");
+      return;
     }
 
-    return ListView.builder(
-      shrinkWrap: true,
-      itemCount: _folders.length,
-      itemBuilder: (context, index) {
-        final folder = _folders[index];
-        return Card(
-          elevation: 2,
-          margin: const EdgeInsets.symmetric(vertical: 6.0),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12.0),
+    Map<String, String> folderMapping = Map.from(_selectedFolder!.folderMapping ?? {
+      "prix unitaire ht": "",
+      "% tva": "",
+      "total tva": "",
+      "total ttc": "",
+    });
+    debugPrint("Mapping initial du dossier '${_selectedFolder!.name}' : $folderMapping");
+
+    TextEditingController unitPriceController = TextEditingController(text: folderMapping["prix unitaire ht"] ?? "");
+    TextEditingController tvaController = TextEditingController(text: folderMapping["% tva"] ?? "");
+    TextEditingController totalTVAController = TextEditingController(text: folderMapping["total tva"] ?? "");
+    TextEditingController totalTTCController = TextEditingController(text: folderMapping["total ttc"] ?? "");
+
+    await showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: Theme.of(context).cardColor,
+          title: Text(
+            "Mapping du dossier '${_selectedFolder!.name}'",
+            style: Theme.of(context).textTheme.titleLarge,
           ),
-          child: ListTile(
-            title: Text(
-              folder.name,
-              style: GoogleFonts.roboto(
-                fontWeight: FontWeight.bold,
-                color: Colors.black87,
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: unitPriceController,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                  decoration: InputDecoration(
+                    labelText: "Prix unitaire HT",
+                    hintText: "Entrez le prix unitaire hors taxes",
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    filled: true,
+                    fillColor: Theme.of(context).dividerColor?.withOpacity(0.2),
+                  ),
+                  keyboardType: TextInputType.numberWithOptions(decimal: true),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: tvaController,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                  decoration: InputDecoration(
+                    labelText: "% TVA",
+                    hintText: "Entrez le pourcentage de TVA (ex. 20)",
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    filled: true,
+                    fillColor: Theme.of(context).dividerColor?.withOpacity(0.2),
+                  ),
+                  keyboardType: TextInputType.numberWithOptions(decimal: true),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: totalTVAController,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                  decoration: InputDecoration(
+                    labelText: "Total TVA",
+                    hintText: "Entrez le montant total de la TVA",
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    filled: true,
+                    fillColor: Theme.of(context).dividerColor?.withOpacity(0.2),
+                  ),
+                  keyboardType: TextInputType.numberWithOptions(decimal: true),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: totalTTCController,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                  decoration: InputDecoration(
+                    labelText: "Total TTC",
+                    hintText: "Entrez le montant total toutes taxes comprises",
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    filled: true,
+                    fillColor: Theme.of(context).dividerColor?.withOpacity(0.2),
+                  ),
+                  keyboardType: TextInputType.numberWithOptions(decimal: true),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                debugPrint("Modification du mapping annulée.");
+                Navigator.pop(context);
+              },
+              child: Text("Annuler", style: Theme.of(context).textTheme.bodyMedium),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                Map<String, String> newMapping = {
+                  "prix unitaire ht": unitPriceController.text.trim(),
+                  "% tva": tvaController.text.trim(),
+                  "total tva": totalTVAController.text.trim(),
+                  "total ttc": totalTTCController.text.trim(),
+                };
+                debugPrint("Nouveau mapping à sauvegarder : $newMapping");
+                try {
+                  await _firestore
+                      .collection('workspaces')
+                      .doc(workspaceId)
+                      .collection('folders')
+                      .doc(_selectedFolder!.id)
+                      .update({'folderMapping': newMapping});
+                  debugPrint("Mapping sauvegardé dans Firestore pour le dossier ${_selectedFolder!.id}");
+                  setState(() {
+                    _selectedFolder = Folder(
+                      id: _selectedFolder!.id,
+                      name: _selectedFolder!.name,
+                      timestamp: _selectedFolder!.timestamp,
+                      folderMapping: newMapping,
+                    );
+                  });
+                  debugPrint("État local mis à jour : ${_selectedFolder!.folderMapping}");
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Mapping du dossier sauvegardé avec succès')),
+                  );
+                } catch (e) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Erreur lors de la sauvegarde : $e')));
+                  debugPrint("Erreur _showFolderMappingDialog: $e");
+                }
+                Navigator.pop(context);
+              },
+              child: Text(
+                "Enregistrer",
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.white),
               ),
             ),
-            subtitle: Text(
-              'Créé le: ${DateFormat.yMMMMd().add_jm().format(folder.timestamp)}',
+          ],
+        );
+      },
+    );
+
+    unitPriceController.dispose();
+    tvaController.dispose();
+    totalTVAController.dispose();
+    totalTTCController.dispose();
+  }
+
+  Widget _buildContactList(List<Contact> contacts) {
+    if (contacts.isEmpty) {
+      return Text(
+        'Aucun contact dans ce dossier.',
+        style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontStyle: FontStyle.italic),
+      );
+    }
+    return ListView.builder(
+      shrinkWrap: true,
+      itemCount: contacts.length,
+      itemBuilder: (context, index) {
+        final contact = contacts[index];
+        return Card(
+          elevation: 3,
+          margin: const EdgeInsets.symmetric(vertical: 6.0, horizontal: 4.0),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.0)),
+          color: Theme.of(context).cardColor, // Couleur de la carte selon le thème
+          child: ListTile(
+            contentPadding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
+            leading: CircleAvatar(
+              backgroundColor: Theme.of(context).primaryColor, // Couleur principale du thème
+              child: Text(
+                contact.firstName.isNotEmpty ? contact.firstName[0].toUpperCase() : '?',
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+            title: Text(
+              '${contact.firstName} ${contact.lastName}',
+              style: Theme.of(context).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.bold),
+            ),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (contact.email.isNotEmpty)
+                  Text('Email: ${contact.email}', style: Theme.of(context).textTheme.bodyMedium),
+                if (contact.phone.isNotEmpty)
+                  Text('Téléphone: ${contact.phone}', style: Theme.of(context).textTheme.bodyMedium),
+                if (contact.company.isNotEmpty)
+                  Text('Entreprise: ${contact.company}', style: Theme.of(context).textTheme.bodyMedium),
+              ],
             ),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 IconButton(
-                  icon: const Icon(Icons.download),
-                  color: Colors.blue,
-                  onPressed: () {
-                    _downloadFolder(folder);
-                  },
-                ),
-                IconButton(
-                  icon: const Icon(Icons.delete, color: Colors.redAccent),
+                  icon: const Icon(Icons.delete),
+                  color: Colors.redAccent, // Couleur statique pour la suppression
                   onPressed: () {
                     showDialog(
                       context: context,
                       builder: (context) => AlertDialog(
-                        title: const Text('Confirmer la suppression'),
-                        content: const Text('Êtes-vous sûr de vouloir supprimer ce dossier?'),
+                        backgroundColor: Theme.of(context).cardColor,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                        title: Text(
+                          'Confirmer la suppression',
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                        content: Text(
+                          'Êtes-vous sûr de vouloir supprimer ce contact?',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
                         actions: [
                           TextButton(
                             onPressed: () => Navigator.of(context).pop(),
-                            child: const Text('Annuler'),
+                            child: Text('Annuler', style: Theme.of(context).textTheme.bodyMedium),
                           ),
                           TextButton(
                             onPressed: () {
                               Navigator.of(context).pop();
-                              _deleteFolder(folder.id);
+                              _deleteContact(contact.id);
                             },
-                            child: const Text('Supprimer'),
+                            child: Text(
+                              'Supprimer',
+                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.redAccent),
+                            ),
                           ),
                         ],
                       ),
                     );
                   },
                 ),
+                IconButton(
+                  icon: const Icon(Icons.info_outline),
+                  color: Theme.of(context).iconTheme.color, // Icône selon le thème
+                  onPressed: () {
+                    _showContactDetails(contact);
+                  },
+                ),
               ],
             ),
-            selected: _selectedFolder?.id == folder.id,
-            selectedTileColor: Colors.indigo[50],
-            onTap: () {
-              setState(() {
-                _selectedFolder = folder;
-                _selectedFolderId = folder.id;
-              });
-              _fetchDocuments(folder.id);
-              _fetchContacts(folder.id);
-            },
           ),
         );
       },
     );
   }
 
-  // Supprime un dossier
-  Future<void> _deleteFolder(String folderId) async {
+  Future<void> _deleteContact(String contactId) async {
     try {
       await _firestore
           .collection('workspaces')
           .doc(workspaceId)
-          .collection('folders')
-          .doc(folderId)
-          .delete();
-
-      print('Dossier supprimé: $folderId');
-
-      // Supprime le folderId chez les contacts
-      WriteBatch batch = _firestore.batch();
-      QuerySnapshot contactsSnapshot = await _firestore
-          .collection('workspaces')
-          .doc(workspaceId)
           .collection('contacts')
-          .where('folderId', isEqualTo: folderId)
-          .get();
-
-      for (var doc in contactsSnapshot.docs) {
-        batch.update(doc.reference, {'folderId': FieldValue.delete()});
-        print('Désassigné le contactId: ${doc.id} du folderId: $folderId');
-      }
-      await batch.commit();
-      print('Batch update pour les contacts terminé');
-
-      // Supprime les documents associés
-      WriteBatch deleteBatch = _firestore.batch();
-      QuerySnapshot documentsSnapshot = await _firestore
-          .collection('workspaces')
-          .doc(workspaceId)
-          .collection('documents')
-          .where('folderId', isEqualTo: folderId)
-          .get();
-
-      for (var doc in documentsSnapshot.docs) {
-        deleteBatch.delete(doc.reference);
-        print('Supprimé le documentId: ${doc.id} du folderId: $folderId');
-      }
-      await deleteBatch.commit();
-      print('Batch delete pour les documents terminé');
-
-      if (_selectedFolder?.id == folderId) {
-        setState(() {
-          _selectedFolder = null;
-          _selectedFolderId = null;
-          _documents = [];
-          _contacts = [];
-        });
-      }
-
+          .doc(contactId)
+          .delete();
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Dossier et contenus supprimés avec succès')),
-      );
+          const SnackBar(content: Text('Contact supprimé avec succès')));
     } catch (e) {
-      print('Error deleting folder: $e');
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Erreur lors de la suppression du dossier')),
-      );
+          const SnackBar(content: Text('Erreur lors de la suppression du contact')));
+      debugPrint("Erreur _deleteContact: $e");
     }
   }
 
-  // Contenu du dossier sélectionné (documents + contacts)
+  void _showContactDetails(Contact contact) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          backgroundColor: Theme.of(context).cardColor, // Couleur de fond selon le thème
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text(
+            '${contact.firstName} ${contact.lastName}',
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (contact.email.isNotEmpty)
+                  Text('Email: ${contact.email}', style: Theme.of(context).textTheme.bodyMedium),
+                const SizedBox(height: 8),
+                if (contact.phone.isNotEmpty)
+                  Text('Téléphone: ${contact.phone}', style: Theme.of(context).textTheme.bodyMedium),
+                const SizedBox(height: 8),
+                if (contact.address.isNotEmpty)
+                  Text('Adresse: ${contact.address}', style: Theme.of(context).textTheme.bodyMedium),
+                const SizedBox(height: 8),
+                if (contact.company.isNotEmpty)
+                  Text('Entreprise: ${contact.company}', style: Theme.of(context).textTheme.bodyMedium),
+                const SizedBox(height: 8),
+                if (contact.externalInfo.isNotEmpty)
+                  Text('Informations Externes: ${contact.externalInfo}', style: Theme.of(context).textTheme.bodyMedium),
+                const SizedBox(height: 8),
+                if (contact.folderId.isNotEmpty)
+                  FutureBuilder<DocumentSnapshot>(
+                    future: _firestore.collection('workspaces').doc(workspaceId).collection('folders').doc(contact.folderId).get(),
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return Text('Dossier: Chargement...', style: Theme.of(context).textTheme.bodyMedium);
+                      }
+                      if (snapshot.hasError || !snapshot.hasData || !snapshot.data!.exists) {
+                        return Text('Dossier: Inconnu', style: Theme.of(context).textTheme.bodyMedium);
+                      }
+                      final folder = Folder.fromFirestore(snapshot.data!);
+                      return Text('Dossier: ${folder.name}', style: Theme.of(context).textTheme.bodyMedium);
+                    },
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              child: Text('Fermer', style: Theme.of(context).textTheme.bodyMedium),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildFolderList() {
+    if (_folders.isEmpty) {
+      return Center(
+        child: Text(
+          'Aucun dossier trouvé.',
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontStyle: FontStyle.italic),
+        ),
+      );
+    }
+    return ListView.builder(
+      shrinkWrap: true,
+      itemCount: _folders.length,
+      itemBuilder: (context, index) {
+        final folder = _folders[index];
+        return DragTarget<DocumentModel>(
+          onAccept: (docModel) async {
+            await _duplicateDocument(docModel, folder.id);
+          },
+          builder: (context, candidateData, rejectedData) {
+            return Card(
+              elevation: 3,
+              margin: const EdgeInsets.symmetric(vertical: 6.0, horizontal: 4.0),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.0)),
+              color: Theme.of(context).cardColor, // Couleur de la carte selon le thème
+              child: ListTile(
+                contentPadding: const EdgeInsets.symmetric(vertical: 12.0, horizontal: 16.0),
+                title: Text(
+                  folder.name,
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.bold),
+                ),
+                subtitle: Text(
+                  'Créé le: ${DateFormat.yMMMMd().add_jm().format(folder.timestamp)}',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.download),
+                      color: Theme.of(context).iconTheme.color, // Icône selon le thème
+                      onPressed: () {
+                        _downloadFolder(folder);
+                      },
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.delete),
+                      color: Colors.redAccent, // Couleur statique pour la suppression
+                      onPressed: () {
+                        showDialog(
+                          context: context,
+                          builder: (context) => AlertDialog(
+                            backgroundColor: Theme.of(context).cardColor,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                            title: Text(
+                              'Confirmer la suppression',
+                              style: Theme.of(context).textTheme.titleLarge,
+                            ),
+                            content: Text(
+                              'Êtes-vous sûr de vouloir supprimer ce dossier?',
+                              style: Theme.of(context).textTheme.bodyMedium,
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.of(context).pop(),
+                                child: Text('Annuler', style: Theme.of(context).textTheme.bodyMedium),
+                              ),
+                              TextButton(
+                                onPressed: () {
+                                  Navigator.of(context).pop();
+                                  _deleteFolder(folder.id);
+                                },
+                                child: Text(
+                                  'Supprimer',
+                                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.redAccent),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+                selected: _selectedFolder?.id == folder.id,
+                selectedTileColor: Theme.of(context).dividerColor?.withOpacity(0.2), // Couleur sélectionnée selon le thème
+                onTap: () {
+                  setState(() {
+                    _selectedFolder = folder;
+                    _selectedFolderId = folder.id;
+                    debugPrint("Dossier sélectionné: ${_selectedFolder!.name}");
+                  });
+                  _fetchDocuments(folder.id);
+                  _fetchContacts(folder.id);
+                },
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildExampleDocuments() {
+    if (_exampleDocuments.isEmpty) {
+      return Center(
+        child: Text(
+          'Aucun document exemple.',
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontStyle: FontStyle.italic),
+        ),
+      );
+    }
+    return ListView.builder(
+      shrinkWrap: true,
+      itemCount: _exampleDocuments.length,
+      itemBuilder: (context, index) {
+        final document = _exampleDocuments[index];
+        return Draggable<DocumentModel>(
+          data: document,
+          feedback: Material(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.of(context).size.width * 0.8,
+              ),
+              child: Card(
+                color: Theme.of(context).primaryColor.withOpacity(0.2), // Feedback selon le thème
+                child: ListTile(
+                  title: Text(
+                    document.title,
+                    style: Theme.of(context).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          childWhenDragging: Opacity(
+            opacity: 0.5,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.of(context).size.width * 0.8,
+              ),
+              child: Card(
+                color: Theme.of(context).cardColor, // Couleur de la carte selon le thème
+                child: ListTile(
+                  title: Text(
+                    document.title,
+                    style: Theme.of(context).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          child: Card(
+            elevation: 3,
+            margin: const EdgeInsets.symmetric(vertical: 6.0, horizontal: 4.0),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.0)),
+            color: Theme.of(context).cardColor, // Couleur de la carte selon le thème
+            child: ListTile(
+              contentPadding: const EdgeInsets.symmetric(vertical: 10.0, horizontal: 16.0),
+              leading: Icon(
+                _getDocumentIcon(document.type),
+                color: _getDocumentColor(document.type),
+                size: 28,
+              ),
+              title: Text(
+                document.title,
+                style: Theme.of(context).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.bold),
+              ),
+              subtitle: Text(
+                'Exemple - Type: ${document.type.toUpperCase()}',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (document.type.toLowerCase() == 'docx')
+                    IconButton(
+                      icon: const Icon(Icons.edit),
+                      color: Theme.of(context).iconTheme.color, // Icône selon le thème
+                      onPressed: () {
+                        _editDocx(document);
+                      },
+                      tooltip: 'Éditer le DOCX',
+                    ),
+                  IconButton(
+                    icon: const Icon(Icons.download),
+                    color: Theme.of(context).iconTheme.color, // Icône selon le thème
+                    onPressed: () {
+                      _downloadFile(document.url, document.title, document.type);
+                    },
+                    tooltip: 'Télécharger',
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.delete),
+                    color: Colors.redAccent, // Couleur statique pour la suppression
+                    onPressed: () {
+                      showDialog(
+                        context: context,
+                        builder: (context) => AlertDialog(
+                          backgroundColor: Theme.of(context).cardColor,
+                          title: Text("Confirmer la suppression", style: Theme.of(context).textTheme.titleLarge),
+                          content: Text("Êtes-vous sûr de vouloir supprimer ce document ?", style: Theme.of(context).textTheme.bodyMedium),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.of(context).pop(),
+                              child: Text("Annuler", style: Theme.of(context).textTheme.bodyMedium),
+                            ),
+                            TextButton(
+                              onPressed: () {
+                                Navigator.of(context).pop();
+                                _deleteDocument(document);
+                              },
+                              child: Text(
+                                "Supprimer",
+                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.redAccent),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                    tooltip: "Supprimer le document",
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildSelectedFolderContent() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           'Dossier: ${_selectedFolder!.name}',
-          style: GoogleFonts.roboto(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-            color: Colors.indigo[800],
-          ),
+          style: Theme.of(context).textTheme.titleLarge,
         ),
         const SizedBox(height: 10),
         Expanded(
@@ -1637,14 +1631,11 @@ class _DocumentPageState extends State<DocumentPage> {
             children: [
               Text(
                 'Documents',
-                style: GoogleFonts.roboto(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.indigo[700],
-                ),
+                style: Theme.of(context).textTheme.titleMedium,
               ),
               const SizedBox(height: 5),
               Expanded(
+                flex: 2,
                 child: _documents.isNotEmpty
                     ? ListView.builder(
                         shrinkWrap: true,
@@ -1652,45 +1643,78 @@ class _DocumentPageState extends State<DocumentPage> {
                         itemBuilder: (context, index) {
                           final document = _documents[index];
                           return Card(
-                            elevation: 2,
-                            margin: const EdgeInsets.symmetric(vertical: 6.0),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12.0),
-                            ),
+                            elevation: 3,
+                            margin: const EdgeInsets.symmetric(vertical: 6.0, horizontal: 4.0),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16.0)),
+                            color: Theme.of(context).cardColor, // Couleur de la carte selon le thème
                             child: ListTile(
+                              contentPadding: const EdgeInsets.symmetric(vertical: 10.0, horizontal: 16.0),
                               leading: Icon(
                                 _getDocumentIcon(document.type),
                                 color: _getDocumentColor(document.type),
+                                size: 28,
                               ),
                               title: Text(
                                 document.title,
-                                style: GoogleFonts.roboto(
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.black87,
-                                ),
+                                style: Theme.of(context).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.bold),
                               ),
-                              subtitle: Text('Type: ${document.type.toUpperCase()}'),
+                              subtitle: Text(
+                                'Type: ${document.type.toUpperCase()}',
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              ),
                               trailing: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   if (document.type.toLowerCase() == 'docx')
                                     IconButton(
-                                      icon: const Icon(Icons.edit, color: Colors.orange),
+                                      icon: const Icon(Icons.edit),
+                                      color: Theme.of(context).iconTheme.color, // Icône selon le thème
                                       onPressed: () {
                                         _editDocx(document);
                                       },
                                       tooltip: 'Éditer le DOCX',
                                     ),
                                   IconButton(
-                                    icon: const Icon(Icons.download, color: Colors.green),
+                                    icon: const Icon(Icons.download),
+                                    color: Theme.of(context).iconTheme.color, // Icône selon le thème
                                     onPressed: () {
-                                      _downloadFile(
-                                        document.url,
-                                        document.title,
-                                        document.type,
-                                      );
+                                      _downloadFile(document.url, document.title, document.type);
                                     },
                                     tooltip: 'Télécharger',
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.delete),
+                                    color: Colors.redAccent, // Couleur statique pour la suppression
+                                    onPressed: () {
+                                      showDialog(
+                                        context: context,
+                                        builder: (context) => AlertDialog(
+                                          backgroundColor: Theme.of(context).cardColor,
+                                          title: Text("Confirmer la suppression", style: Theme.of(context).textTheme.titleLarge),
+                                          content: Text(
+                                            "Êtes-vous sûr de vouloir supprimer ce document ?",
+                                            style: Theme.of(context).textTheme.bodyMedium,
+                                          ),
+                                          actions: [
+                                            TextButton(
+                                              onPressed: () => Navigator.of(context).pop(),
+                                              child: Text("Annuler", style: Theme.of(context).textTheme.bodyMedium),
+                                            ),
+                                            TextButton(
+                                              onPressed: () {
+                                                Navigator.of(context).pop();
+                                                _deleteDocument(document);
+                                              },
+                                              child: Text(
+                                                "Supprimer",
+                                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.redAccent),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                    },
+                                    tooltip: "Supprimer le document",
                                   ),
                                 ],
                               ),
@@ -1700,27 +1724,17 @@ class _DocumentPageState extends State<DocumentPage> {
                       )
                     : Text(
                         'Aucun document dans ce dossier.',
-                        style: GoogleFonts.roboto(fontSize: 14, color: Colors.grey[600]),
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontStyle: FontStyle.italic),
                       ),
               ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 10),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+              const SizedBox(height: 20),
               Text(
                 'Contacts',
-                style: GoogleFonts.roboto(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.indigo[700],
-                ),
+                style: Theme.of(context).textTheme.titleMedium,
               ),
               const SizedBox(height: 5),
               Expanded(
+                flex: 1,
                 child: _buildContactList(_contacts),
               ),
             ],
@@ -1746,13 +1760,336 @@ class _DocumentPageState extends State<DocumentPage> {
   Color _getDocumentColor(String type) {
     switch (type.toLowerCase()) {
       case 'pdf':
-        return Colors.red;
+        return Theme.of(context).iconTheme.color ?? Colors.grey; // Icône selon le thème
       case 'docx':
-        return Colors.blue;
+        return Colors.blueGrey; // Peut être adapté au thème si souhaité
       case 'txt':
-        return Colors.grey;
+        return Theme.of(context).iconTheme.color ?? Colors.grey; // Icône selon le thème
       default:
-        return Colors.black;
+        return Theme.of(context).iconTheme.color ?? Colors.black; // Icône selon le thème
     }
+  }
+
+  void _showCreateDocumentDialog() {
+    if (_selectedFolder == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Veuillez sélectionner un dossier avant de créer un document.')));
+      return;
+    }
+    String documentTitle = '';
+    String documentContent = '';
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Theme.of(context).cardColor, // Couleur de fond selon le thème
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          'Créer un Nouveau Document',
+          style: Theme.of(context).textTheme.titleLarge,
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                style: Theme.of(context).textTheme.bodyMedium,
+                decoration: InputDecoration(
+                  hintText: 'Titre du document',
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  filled: true,
+                  fillColor: Theme.of(context).dividerColor?.withOpacity(0.2),
+                ),
+                onChanged: (value) {
+                  documentTitle = value;
+                },
+              ),
+              const SizedBox(height: 20),
+              TextField(
+                style: Theme.of(context).textTheme.bodyMedium,
+                decoration: InputDecoration(
+                  hintText: 'Contenu du document',
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  filled: true,
+                  fillColor: Theme.of(context).dividerColor?.withOpacity(0.2),
+                ),
+                maxLines: 5,
+                onChanged: (value) {
+                  documentContent = value;
+                },
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text('Annuler', style: Theme.of(context).textTheme.bodyMedium),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              if (documentTitle.trim().isNotEmpty && documentContent.trim().isNotEmpty) {
+                _generateDocument(documentTitle.trim(), documentContent.trim());
+                Navigator.of(context).pop();
+              }
+            },
+            child: Text(
+              'Créer',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.white),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showImportDocumentDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Theme.of(context).cardColor, // Couleur de fond selon le thème
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          'Importer un Document',
+          style: Theme.of(context).textTheme.titleLarge,
+        ),
+        content: Text(
+          'Sélectionnez un fichier à importer',
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text('Annuler', style: Theme.of(context).textTheme.bodyMedium),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              _importDocument();
+              Navigator.of(context).pop();
+            },
+            child: Text(
+              'Importer',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.white),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showCreateFolderDialog() {
+    String folderName = '';
+    List<String> selectedContactIds = [];
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: Theme.of(context).cardColor, // Couleur de fond selon le thème
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text(
+            'Créer un Dossier',
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+          content: Container(
+            width: double.maxFinite,
+            constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.6),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  style: Theme.of(context).textTheme.bodyMedium,
+                  decoration: InputDecoration(
+                    hintText: 'Nom du dossier',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    filled: true,
+                    fillColor: Theme.of(context).dividerColor?.withOpacity(0.2),
+                  ),
+                  onChanged: (value) {
+                    folderName = value;
+                  },
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  'Associer des Contacts (Optionnel)',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 10),
+                Expanded(
+                  child: _availableContacts.isNotEmpty
+                      ? ListView.builder(
+                          itemCount: _availableContacts.length,
+                          itemBuilder: (context, index) {
+                            final contact = _availableContacts[index];
+                            return CheckboxListTile(
+                              activeColor: Theme.of(context).primaryColor, // Couleur principale du thème
+                              title: Text(
+                                '${contact.firstName} ${contact.lastName}',
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              ),
+                              value: selectedContactIds.contains(contact.id),
+                              onChanged: (bool? value) {
+                                setState(() {
+                                  if (value == true) {
+                                    selectedContactIds.add(contact.id);
+                                  } else {
+                                    selectedContactIds.remove(contact.id);
+                                  }
+                                });
+                              },
+                            );
+                          },
+                        )
+                      : Text(
+                          'Aucun contact disponible.',
+                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontStyle: FontStyle.italic),
+                        ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text('Annuler', style: Theme.of(context).textTheme.bodyMedium),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                if (folderName.trim().isNotEmpty) {
+                  _createFolder(folderName.trim(), selectedContactIds);
+                  Navigator.of(context).pop();
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Veuillez entrer un nom de dossier')));
+                }
+              },
+              child: Text(
+                'Créer',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.white),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(
+          'Gestion des Documents',
+          style: Theme.of(context).textTheme.titleLarge?.copyWith(color: Colors.white),
+        ),
+        backgroundColor: Theme.of(context).primaryColor, // Couleur principale du thème
+        iconTheme: Theme.of(context).iconTheme, // Icônes selon le thème
+        elevation: 0,
+        actions: [
+          if (_selectedFolder != null)
+            IconButton(
+              icon: const Icon(Icons.settings_applications),
+              tooltip: 'Modifier mapping dossier',
+              onPressed: _showFolderMappingDialog,
+            ),
+          IconButton(
+            icon: const Icon(Icons.create_new_folder),
+            tooltip: 'Créer un dossier',
+            onPressed: _showCreateFolderDialog,
+          ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            onSelected: (value) {
+              if (value == 'create') {
+                _showCreateDocumentDialog();
+              } else if (value == 'import') {
+                _showImportDocumentDialog();
+              } else if (value == 'example') {
+                _showExampleFromDocxDialog();
+              } else if (value == 'mapping') {
+                _showMappingGlobalDialog();
+              }
+            },
+            itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+              PopupMenuItem<String>(
+                value: 'create',
+                child: Text('Créer Document', style: Theme.of(context).textTheme.bodyMedium),
+              ),
+              PopupMenuItem<String>(
+                value: 'import',
+                child: Text('Importer Document', style: Theme.of(context).textTheme.bodyMedium),
+              ),
+              PopupMenuItem<String>(
+                value: 'example',
+                child: Text('Exemple DOCX', style: Theme.of(context).textTheme.bodyMedium),
+              ),
+              PopupMenuItem<String>(
+                value: 'mapping',
+                child: Text('Modifier Mapping global', style: Theme.of(context).textTheme.bodyMedium),
+              ),
+            ],
+          ),
+        ],
+      ),
+      body: Container(
+        color: Theme.of(context).scaffoldBackgroundColor, // Fond selon le thème
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              children: [
+                const SizedBox(height: 30),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Documents Exemples',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    ElevatedButton(
+                      onPressed: _showImportDocumentDialog,
+                      child: Text(
+                        'Importer',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.white),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Expanded(flex: 1, child: _buildExampleDocuments()),
+                const SizedBox(height: 20),
+                Text('Dossiers Existants',
+                    style: GoogleFonts.roboto(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.grey[900])),
+                const SizedBox(height: 10),
+                Expanded(
+                  flex: 2,
+                  child: Row(
+                    children: [
+                      Expanded(flex: 1, child: _buildFolderList()),
+                      const SizedBox(width: 20),
+                      Expanded(
+                        flex: 2,
+                        child: _selectedFolder != null
+                            ? _buildSelectedFolderContent()
+                            : Center(child: Text('Sélectionnez un dossier pour voir son contenu.',
+                                style: GoogleFonts.roboto(fontSize: 16, color: Colors.grey[600]))),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _showCreateFolderDialog,
+        tooltip: 'Créer un dossier',
+        backgroundColor: Colors.grey[900],
+        child: const Icon(Icons.create_new_folder),
+      ),
+    );
   }
 }

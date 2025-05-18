@@ -7,9 +7,11 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:provider/provider.dart'; // Ajout pour accéder au ThemeProvider
 
 import '../models/contact.dart';
 import '../models/folder.dart';
+import '../theme_provider.dart'; // Assurez-vous que le chemin est correct
 import 'contact_detail_page.dart';
 
 class ContactPage extends StatefulWidget {
@@ -28,10 +30,6 @@ class _ContactPageState extends State<ContactPage> {
 
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final TextEditingController _searchController = TextEditingController();
-
-  // Pour harmoniser avec le Dashboard
-  final Color primaryColor = Colors.grey[800]!;
-  final Color backgroundColor = const Color.fromARGB(255, 197, 197, 197);
 
   @override
   void initState() {
@@ -153,7 +151,6 @@ class _ContactPageState extends State<ContactPage> {
             isFirstLine = false;
             continue;
           }
-          // Adapter les colonnes selon votre CSV
           String firstName = row[0].toString();
           String lastName = row[1].toString();
           String email = row[2].toString();
@@ -194,7 +191,7 @@ class _ContactPageState extends State<ContactPage> {
   }
 
   // Affichage de la liste des contacts groupés par première lettre
-  Widget _buildContactList() {
+  Widget _buildContactList(BuildContext context) {
     List<Contact> contactsToDisplay = _filteredContacts;
     contactsToDisplay.sort((a, b) =>
         a.firstName.toLowerCase().compareTo(b.firstName.toLowerCase()));
@@ -213,11 +210,7 @@ class _ContactPageState extends State<ContactPage> {
             padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16),
             child: Text(
               currentLetter,
-              style: GoogleFonts.roboto(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: primaryColor,
-              ),
+              style: Theme.of(context).textTheme.titleMedium, // Utilisation du thème
             ),
           ),
         );
@@ -229,10 +222,11 @@ class _ContactPageState extends State<ContactPage> {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
           ),
+          color: Theme.of(context).cardColor, // Couleur de la carte selon le thème
           child: ListTile(
             contentPadding: const EdgeInsets.all(12),
             leading: CircleAvatar(
-              backgroundColor: primaryColor,
+              backgroundColor: Theme.of(context).primaryColor, // Couleur principale du thème
               child: Text(
                 contact.firstName.isNotEmpty
                     ? contact.firstName[0].toUpperCase()
@@ -242,24 +236,28 @@ class _ContactPageState extends State<ContactPage> {
             ),
             title: Text(
               '${contact.firstName} ${contact.lastName}',
-              style: GoogleFonts.roboto(fontWeight: FontWeight.w600),
+              style: Theme.of(context).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600),
             ),
             subtitle: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (contact.email.isNotEmpty)
-                  Text('Email: ${contact.email}', style: GoogleFonts.roboto(fontSize: 12)),
+                  Text('Email: ${contact.email}',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontSize: 12)),
                 if (contact.phone.isNotEmpty)
-                  Text('Tél: ${contact.phone}', style: GoogleFonts.roboto(fontSize: 12)),
+                  Text('Tél: ${contact.phone}',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontSize: 12)),
                 if (contact.company.isNotEmpty)
-                  Text('Entreprise: ${contact.company}', style: GoogleFonts.roboto(fontSize: 12)),
+                  Text('Entreprise: ${contact.company}',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontSize: 12)),
               ],
             ),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 IconButton(
-                  icon: const Icon(Icons.info_outline, color: Colors.blue),
+                  icon: const Icon(Icons.info_outline),
+                  color: Colors.blue, // Gardé statique, mais peut être adapté
                   onPressed: () {
                     Navigator.push(
                       context,
@@ -273,25 +271,33 @@ class _ContactPageState extends State<ContactPage> {
                   },
                 ),
                 IconButton(
-                  icon: const Icon(Icons.delete, color: Colors.redAccent),
+                  icon: const Icon(Icons.delete),
+                  color: Colors.redAccent, // Gardé statique, mais peut être adapté
                   onPressed: () {
                     showDialog(
                       context: context,
                       builder: (context) => AlertDialog(
-                        backgroundColor: Colors.white,
-                        title: Text('Confirmer la suppression', style: GoogleFonts.roboto(fontWeight: FontWeight.bold)),
-                        content: Text('Êtes-vous sûr de vouloir supprimer ce contact ?', style: GoogleFonts.roboto()),
+                        backgroundColor: Theme.of(context).cardColor,
+                        title: Text('Confirmer la suppression',
+                            style: Theme.of(context).textTheme.titleLarge),
+                        content: Text('Êtes-vous sûr de vouloir supprimer ce contact ?',
+                            style: Theme.of(context).textTheme.bodyMedium),
                         actions: [
                           TextButton(
                             onPressed: () => Navigator.of(context).pop(),
-                            child: Text('Annuler', style: GoogleFonts.roboto()),
+                            child: Text('Annuler',
+                                style: Theme.of(context).textTheme.bodyMedium),
                           ),
                           TextButton(
                             onPressed: () {
                               Navigator.of(context).pop();
                               _deleteContact(contact.id);
                             },
-                            child: Text('Supprimer', style: GoogleFonts.roboto(color: Colors.redAccent)),
+                            child: Text('Supprimer',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodyMedium
+                                    ?.copyWith(color: Colors.redAccent)),
                           ),
                         ],
                       ),
@@ -325,11 +331,11 @@ class _ContactPageState extends State<ContactPage> {
   Future<void> _showAddContactDialog() async {
     final _formKeyAdd = GlobalKey<FormState>();
     final TextEditingController firstNameController = TextEditingController();
-    final TextEditingController lastNameController  = TextEditingController();
-    final TextEditingController emailController     = TextEditingController();
-    final TextEditingController phoneController     = TextEditingController();
-    final TextEditingController addressController   = TextEditingController();
-    final TextEditingController companyController   = TextEditingController();
+    final TextEditingController lastNameController = TextEditingController();
+    final TextEditingController emailController = TextEditingController();
+    final TextEditingController phoneController = TextEditingController();
+    final TextEditingController addressController = TextEditingController();
+    final TextEditingController companyController = TextEditingController();
     final TextEditingController externalInfoController = TextEditingController();
     String? selectedFolderId;
 
@@ -338,8 +344,9 @@ class _ContactPageState extends State<ContactPage> {
       barrierDismissible: false,
       builder: (context) {
         return AlertDialog(
-          backgroundColor: Colors.white,
-          title: Text('Ajouter un Contact', style: GoogleFonts.roboto(fontWeight: FontWeight.bold)),
+          backgroundColor: Theme.of(context).cardColor, // Couleur de fond selon le thème
+          title: Text('Ajouter un Contact',
+              style: Theme.of(context).textTheme.titleLarge),
           content: SingleChildScrollView(
             child: Form(
               key: _formKeyAdd,
@@ -348,36 +355,36 @@ class _ContactPageState extends State<ContactPage> {
                 children: [
                   TextFormField(
                     controller: firstNameController,
-                    style: GoogleFonts.roboto(),
+                    style: Theme.of(context).textTheme.bodyMedium,
                     decoration: InputDecoration(
                       labelText: 'Prénom',
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                       filled: true,
-                      fillColor: Colors.grey[100],
+                      fillColor: Theme.of(context).dividerColor?.withOpacity(0.2),
                     ),
                     validator: (value) => (value == null || value.isEmpty) ? 'Champ requis' : null,
                   ),
                   const SizedBox(height: 12),
                   TextFormField(
                     controller: lastNameController,
-                    style: GoogleFonts.roboto(),
+                    style: Theme.of(context).textTheme.bodyMedium,
                     decoration: InputDecoration(
                       labelText: 'Nom',
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                       filled: true,
-                      fillColor: Colors.grey[100],
+                      fillColor: Theme.of(context).dividerColor?.withOpacity(0.2),
                     ),
                     validator: (value) => (value == null || value.isEmpty) ? 'Champ requis' : null,
                   ),
                   const SizedBox(height: 12),
                   TextFormField(
                     controller: emailController,
-                    style: GoogleFonts.roboto(),
+                    style: Theme.of(context).textTheme.bodyMedium,
                     decoration: InputDecoration(
                       labelText: 'Email',
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                       filled: true,
-                      fillColor: Colors.grey[100],
+                      fillColor: Theme.of(context).dividerColor?.withOpacity(0.2),
                     ),
                     keyboardType: TextInputType.emailAddress,
                     validator: (value) {
@@ -394,12 +401,12 @@ class _ContactPageState extends State<ContactPage> {
                   const SizedBox(height: 12),
                   TextFormField(
                     controller: phoneController,
-                    style: GoogleFonts.roboto(),
+                    style: Theme.of(context).textTheme.bodyMedium,
                     decoration: InputDecoration(
                       labelText: 'Téléphone',
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                       filled: true,
-                      fillColor: Colors.grey[100],
+                      fillColor: Theme.of(context).dividerColor?.withOpacity(0.2),
                     ),
                     keyboardType: TextInputType.phone,
                     validator: (value) => (value == null || value.isEmpty) ? 'Champ requis' : null,
@@ -407,34 +414,34 @@ class _ContactPageState extends State<ContactPage> {
                   const SizedBox(height: 12),
                   TextFormField(
                     controller: addressController,
-                    style: GoogleFonts.roboto(),
+                    style: Theme.of(context).textTheme.bodyMedium,
                     decoration: InputDecoration(
                       labelText: 'Adresse',
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                       filled: true,
-                      fillColor: Colors.grey[100],
+                      fillColor: Theme.of(context).dividerColor?.withOpacity(0.2),
                     ),
                   ),
                   const SizedBox(height: 12),
                   TextFormField(
                     controller: companyController,
-                    style: GoogleFonts.roboto(),
+                    style: Theme.of(context).textTheme.bodyMedium,
                     decoration: InputDecoration(
                       labelText: 'Entreprise',
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                       filled: true,
-                      fillColor: Colors.grey[100],
+                      fillColor: Theme.of(context).dividerColor?.withOpacity(0.2),
                     ),
                   ),
                   const SizedBox(height: 12),
                   TextFormField(
                     controller: externalInfoController,
-                    style: GoogleFonts.roboto(),
+                    style: Theme.of(context).textTheme.bodyMedium,
                     decoration: InputDecoration(
                       labelText: 'Infos supplémentaires',
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                       filled: true,
-                      fillColor: Colors.grey[100],
+                      fillColor: Theme.of(context).dividerColor?.withOpacity(0.2),
                     ),
                     maxLines: 2,
                   ),
@@ -445,7 +452,7 @@ class _ContactPageState extends State<ContactPage> {
                       labelText: 'Dossier (Optionnel)',
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                       filled: true,
-                      fillColor: Colors.grey[100],
+                      fillColor: Theme.of(context).dividerColor?.withOpacity(0.2),
                     ),
                     items: [
                       const DropdownMenuItem(
@@ -472,10 +479,9 @@ class _ContactPageState extends State<ContactPage> {
               onPressed: () {
                 Navigator.of(context).pop();
               },
-              child: Text('Annuler', style: GoogleFonts.roboto()),
+              child: Text('Annuler', style: Theme.of(context).textTheme.bodyMedium),
             ),
             ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: primaryColor),
               onPressed: () async {
                 if (_formKeyAdd.currentState!.validate()) {
                   User? currentUser = FirebaseAuth.instance.currentUser;
@@ -515,7 +521,11 @@ class _ContactPageState extends State<ContactPage> {
                   }
                 }
               },
-              child: Text('Ajouter', style: GoogleFonts.roboto(color: Colors.white)),
+              child: Text('Ajouter',
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodyMedium
+                      ?.copyWith(color: Colors.white)),
             ),
           ],
         );
@@ -526,10 +536,15 @@ class _ContactPageState extends State<ContactPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: backgroundColor,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor, // Fond selon le thème
       appBar: AppBar(
-        backgroundColor: primaryColor,
-        title: Text('Annuaire des Contacts', style: GoogleFonts.roboto(fontWeight: FontWeight.bold)),
+        backgroundColor: Theme.of(context).primaryColor, // Couleur principale du thème
+        title: Text('Annuaire des Contacts',
+            style: Theme.of(context)
+                .textTheme
+                .titleLarge
+                ?.copyWith(color: Colors.white)),
+        iconTheme: Theme.of(context).iconTheme, // Icônes selon le thème
         actions: [
           IconButton(
             icon: const Icon(Icons.file_upload),
@@ -554,12 +569,12 @@ class _ContactPageState extends State<ContactPage> {
               padding: const EdgeInsets.all(16),
               child: TextField(
                 controller: _searchController,
-                style: GoogleFonts.roboto(),
+                style: Theme.of(context).textTheme.bodyMedium,
                 decoration: InputDecoration(
                   hintText: 'Rechercher un contact...',
-                  prefixIcon: const Icon(Icons.search),
+                  prefixIcon: Icon(Icons.search, color: Theme.of(context).iconTheme.color),
                   filled: true,
-                  fillColor: Colors.grey[200],
+                  fillColor: Theme.of(context).dividerColor?.withOpacity(0.2),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                     borderSide: BorderSide.none,
@@ -571,17 +586,17 @@ class _ContactPageState extends State<ContactPage> {
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: _buildContactList(),
+                child: _buildContactList(context), // Passer le contexte ici
               ),
             ),
           ],
         ),
       ),
       floatingActionButton: FloatingActionButton(
-        backgroundColor: primaryColor,
+        backgroundColor: Theme.of(context).primaryColor, // Couleur principale du thème
         onPressed: _showAddContactDialog,
         tooltip: 'Ajouter un nouveau contact',
-        child: const Icon(Icons.person_add),
+        child: Icon(Icons.person_add, color: Theme.of(context).iconTheme.color),
       ),
     );
   }

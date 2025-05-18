@@ -1,5 +1,3 @@
-// lib/models/chat_message.dart
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 /// Enumération des types de messages.

@@ -1,5 +1,3 @@
-// lib/services/ai_service.dart
-
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -23,7 +21,8 @@ class AIService with ChangeNotifier {
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
   // Charger la clé API depuis les variables d'environnement pour plus de sécurité.
-
+  static const String _apiKey =
+      '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';
 
   // Map des handlers d'actions.
   late final Map<AIActionType, Future<void> Function(Map<String, dynamic>)> _actionHandlers;
@@ -47,16 +46,16 @@ class AIService with ChangeNotifier {
   /// Constructeur initialisant les handlers d'actions et les services vocaux.
   AIService() {
     _actionHandlers = {
-      AIActionType.create_task: _handleCreateTask,
-      AIActionType.update_task: _handleUpdateTask,
-      AIActionType.delete_task: _handleDeleteTask,
-      AIActionType.create_event: _handleCreateEvent,
-      AIActionType.update_event: _handleUpdateEvent,
-      AIActionType.delete_event: _handleDeleteEvent,
-      AIActionType.create_folder_with_document: _handleCreateFolderWithDocument,
-      AIActionType.add_contact: _handleAddContact,
-      AIActionType.create_folder_and_add_contact: _handleCreateFolderAndAddContact,
-      AIActionType.modify_document: _handleModifyDocument,
+      AIActionType.create_task: handleCreateTask, // Changé en nom de méthode public
+      AIActionType.update_task: handleUpdateTask, // Changé en nom de méthode public
+      AIActionType.delete_task: handleDeleteTask, // Changé en nom de méthode public
+      AIActionType.create_event: handleCreateEvent, // Changé en nom de méthode public
+      AIActionType.update_event: handleUpdateEvent, // Changé en nom de méthode public
+      AIActionType.delete_event: handleDeleteEvent, // Changé en nom de méthode public
+      AIActionType.create_folder_with_document: handleCreateFolderWithDocument, // Changé en nom de méthode public
+      AIActionType.add_contact: handleAddContact, // Changé en nom de méthode public
+      AIActionType.create_folder_and_add_contact: handleCreateFolderAndAddContact, // Changé en nom de méthode public
+      AIActionType.modify_document: handleModifyDocument, // Changé en nom de méthode public
     };
 
     // Initialiser les services vocaux.
@@ -74,14 +73,14 @@ class AIService with ChangeNotifier {
     final userDoc = await _firestore.collection('users').doc(user.uid).get();
     if (!userDoc.exists) throw Exception('Document utilisateur introuvable');
 
-    final workspaceId = userDoc.get('workspaceId');
+    final workspaceId = userDoc.get('workspaceId') as String?; // Typage explicite
     if (workspaceId == null) throw Exception('Workspace non configuré');
 
     return workspaceId;
   }
 
   //----------------------------------------------------------------------------
-  // 1) OBTENIR LA RÉPONSE DE L'IA
+  // 1) OBTENIR LA RÉPONSE DE L'IA SANS LIMITATION DE LONGUEUR
   //----------------------------------------------------------------------------
   Future<String> getAIResponse(String prompt) async {
     if (_apiKey.isEmpty) {
@@ -117,8 +116,7 @@ class AIService with ChangeNotifier {
             .collection('documents')
             .where('folderId', isEqualTo: folder.id)
             .get();
-        folderDocuments[folder['name']] =
-            docSnapshot.docs.map((doc) => doc['title'] as String).toList();
+        folderDocuments[folder['name'] as String] = docSnapshot.docs.map((doc) => doc['title'] as String).toList();
       }));
 
       String foldersContext = 'Voici les dossiers existants et leurs documents :\n';
@@ -129,11 +127,71 @@ class AIService with ChangeNotifier {
       }
 
       final String systemPrompt = '''
-Tu es un assistant personnel intelligent qui aide l'utilisateur dans un réseau social d'entreprise. La date et l'heure actuelles sont ${currentDate}.
+Tu es un assistant IA professionnel intégré à notre plateforme d'entreprise. La date et l'heure actuelles sont ${currentDate}.
 Voici les dossiers existants et leurs documents:
 ${foldersContext}
 
-Lorsque je te demande d'effectuer une ou plusieurs actions liées à l'application, réponds uniquement avec un ou plusieurs JSON structurés selon les instructions fournies. Pour les autres questions, réponds normalement. Voici les formats à utiliser :
+## CE QUE JE PEUX FAIRE POUR VOUS ##
+
+Voici les principales fonctionnalités que je peux réaliser pour vous :
+
+1. GESTION DE LA FACTURATION ET DES FINANCES :
+   - Créer, modifier et supprimer devis et factures en quelques clics
+   - Envoyer automatiquement des relances de paiement selon des règles personnalisées
+   - Suivre l'état des paiements et des échéances via un tableau de bord dédié
+
+2. GESTION DE PLANNING ET D'ÉVÉNEMENTS :
+   - Créer, modifier et supprimer des rendez-vous ou réunions dans votre calendrier
+   - Synchroniser automatiquement plusieurs agendas (Google, Outlook…)
+   - Vous envoyer des rappels intelligents pour éviter les conflits de planning
+
+3. GÉNÉRATION ET ORGANISATION DE DOCUMENTS :
+   - Créer des dossiers et sous-dossiers pour structurer vos fichiers
+   - Générer automatiquement des documents (contrats, rapports, e-mails) à partir de modèles et de variables pré-remplies
+   - Modifier en temps réel le contenu et partager directement avec vos collaborateurs
+
+4. GESTION DE CONTACTS ET CRM :
+   - Ajouter de nouveaux contacts (clients, fournisseurs, partenaires) avec toutes leurs coordonnées
+   - Organiser vos contacts par dossier ou étiquette (prospects, VIP, fournisseurs…)
+   - Suivre l'historique des échanges pour chaque contact
+
+5. AUTOMATISATION INTELLIGENTE ET ASSISTANCE IA :
+   - Répondre à vos questions sur l'utilisation de la plateforme
+   - Exécuter des actions à votre demande (ex. "Génère-moi un rapport de ventes")
+   - Proposer des suggestions automatiques que vous pouvez valider ou ajuster avant exécution
+
+## EXEMPLES D'UTILISATION ##
+
+Voici quelques exemples de la façon dont vous pouvez m'utiliser :
+
+Pour les FACTURES et FINANCES :
+- "Crée une facture pour le client Dupont pour la prestation de conseil"
+- "Envoie une relance pour les factures impayées de plus de 30 jours"
+- "Montre-moi l'état des paiements du mois dernier"
+
+Pour les ÉVÉNEMENTS :
+- "Planifie une réunion d'équipe jeudi prochain à 14h"
+- "Déplace mon rendez-vous avec Martin à vendredi matin"
+- "Crée un événement pour le salon professionnel du 15 au 17 octobre"
+
+Pour les DOCUMENTS :
+- "Crée un dossier 'Projet XYZ' avec un document de spécifications"
+- "Génère un contrat de service pour le client ABC avec les tarifs standards"
+- "Modifie le rapport trimestriel pour mettre à jour les chiffres de vente"
+
+Pour les CONTACTS :
+- "Ajoute Jean Dupont à mes contacts avec son email jean.dupont@example.com"
+- "Crée un dossier 'Fournisseurs' et classe mes contacts concernés"
+- "Montre-moi l'historique des échanges avec la société ABC"
+
+Pour l'ASSISTANCE GÉNÉRALE :
+- "Que peux-tu faire pour m'aider ?"
+- "Comment puis-je créer une facture récurrente ?"
+- "Génère-moi un rapport des ventes du dernier trimestre"
+
+Lorsque je te demande d'effectuer une ou plusieurs actions liées à l'application, réponds uniquement avec un ou plusieurs JSON structurés selon les instructions fournies. Pour les autres questions, réponds normalement avec un ton professionnel et direct.
+
+Si l'utilisateur demande ce que je peux faire ou mes fonctionnalités, présente simplement les 5 catégories de fonctionnalités avec leurs points principaux, sans fioritures marketing.
 
 Pour créer une tâche, réponds avec le format suivant :
 
@@ -227,14 +285,14 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
           'Authorization': 'Bearer $_apiKey',
         },
         body: jsonEncode({
-          'model': 'gpt-3.5-turbo',
+          'model': 'gpt-3.5-turbo', // Resté sur gpt-3.5-turbo pour le coût
           'messages': [
             {'role': 'system', 'content': systemPrompt},
             {'role': 'user', 'content': prompt},
           ],
-          'max_tokens': 1000,
+          'temperature': 0.7, // Conserver pour un équilibre créativité/précision
         }),
-      );
+      ).timeout(const Duration(seconds: 20)); // Augmenté pour permettre de longues réponses sans limite
 
       if (response.statusCode == 200) {
         final decodedBody = utf8.decode(response.bodyBytes);
@@ -243,7 +301,7 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
         debugPrint('Réponse de l\'IA (avant déduplication) : $aiMessage');
 
         // Déduplication de la réponse JSON.
-        if (_isJson(aiMessage)) {
+        if (isJson(aiMessage)) {
           aiMessage = deduplicateJsonActions(aiMessage);
           debugPrint('Réponse de l\'IA (après déduplication) : $aiMessage');
         }
@@ -600,29 +658,16 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
       double totalTtc = 0;
       List<XmlNode> newRows = [];
       for (var item in invoiceItems) {
-        final description =
-            _escapeXml(item["item_description"] ?? "Description manquante");
-        final quantity =
-            _escapeXml(item["item_quantity"]?.toString() ?? "1");
-        final unit =
-            _escapeXml(item["item_unit"] ?? "unit");
-        final priceHT =
-            _escapeXml(item["item_price_ht"]?.toString() ?? "100");
-        final tvaRate =
-            _escapeXml(item["item_tva_rate"]?.toString() ?? "20");
-        final tvaTotal =
-            _escapeXml(item["item_tva_total"]?.toString() ?? "20");
-        final ttcTotal =
-            _escapeXml(item["item_ttc_total"]?.toString() ?? "120");
-        totalHT += double.tryParse(
-                (item["item_price_ht"]?.toString().replaceAll('€', '').trim()) ?? "0") ??
-            0;
-        totalTva += double.tryParse(
-                (item["item_tva_total"]?.toString().replaceAll('€', '').replaceAll(',', '.').trim()) ?? "0") ??
-            0;
-        totalTtc += double.tryParse(
-                (item["item_ttc_total"]?.toString().replaceAll('EUR', '').trim()) ?? "0") ??
-            0;
+        final description = _escapeXml(item["item_description"] ?? "Description manquante");
+        final quantity = _escapeXml(item["item_quantity"]?.toString() ?? "1");
+        final unit = _escapeXml(item["item_unit"] ?? "unit");
+        final priceHT = _escapeXml(item["item_price_ht"]?.toString() ?? "100");
+        final tvaRate = _escapeXml(item["item_tva_rate"]?.toString() ?? "20");
+        final tvaTotal = _escapeXml(item["item_tva_total"]?.toString() ?? "20");
+        final ttcTotal = _escapeXml(item["item_ttc_total"]?.toString() ?? "120");
+        totalHT += double.tryParse((item["item_price_ht"]?.toString().replaceAll('€', '').trim()) ?? "0") ?? 0;
+        totalTva += double.tryParse((item["item_tva_total"]?.toString().replaceAll('€', '').replaceAll(',', '.').trim()) ?? "0") ?? 0;
+        totalTtc += double.tryParse((item["item_ttc_total"]?.toString().replaceAll('EUR', '').trim()) ?? "0") ?? 0;
         newRows.add(XmlElement(XmlName('w:tr'), [], [
           _createTableCell(description),
           _createTableCell(quantity),
@@ -633,12 +678,9 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
           _createTableCell(ttcTotal),
         ]));
       }
-      final totalHtStr =
-          '${totalHT.toStringAsFixed(2).replaceAll('.', ',')} EUR';
-      final totalTvaStr =
-          '${totalTva.toStringAsFixed(2).replaceAll('.', ',')} EUR';
-      final totalTtcStr =
-          '${totalTtc.toStringAsFixed(2).replaceAll('.', ',')} EUR';
+      final totalHtStr = '${totalHT.toStringAsFixed(2).replaceAll('.', ',')} EUR';
+      final totalTvaStr = '${totalTva.toStringAsFixed(2).replaceAll('.', ',')} EUR';
+      final totalTtcStr = '${totalTtc.toStringAsFixed(2).replaceAll('.', ',')} EUR';
       newRows.addAll([
         XmlElement(XmlName('w:tr'), [], [
           _createTableCell('Total HT'),
@@ -717,11 +759,11 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
   //----------------------------------------------------------------------------
   // 11) HANDLE MODIFY_DOCUMENT
   //----------------------------------------------------------------------------
-  Future<void> _handleModifyDocument(Map<String, dynamic> data) async {
+  Future<void> handleModifyDocument(Map<String, dynamic> data) async {
     try {
       final workspaceId = await _getWorkspaceId();
-      String folderName = _getValue(data, ['folderName', 'folder_name']);
-      String documentName = _getValue(data, ['documentName', 'document_name']);
+      String folderName = getValue(data, ['folderName', 'folder_name']);
+      String documentName = getValue(data, ['documentName', 'document_name']);
       Map<String, String> variables = Map<String, String>.from(data['variables'] ?? {});
       if (folderName.isEmpty || documentName.isEmpty) {
         debugPrint('folderName ou documentName manquant.');
@@ -758,8 +800,8 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
         debugPrint('Données du document non trouvées ou URL manquante.');
         return;
       }
-      String docUrl = docData['url'];
-      String docType = docData['type'] ?? 'docx';
+      String docUrl = docData['url'] as String;
+      String docType = docData['type'] as String? ?? 'docx';
       if (docType.toLowerCase() != 'docx') {
         debugPrint('Type de document non supporté: $docType');
         return;
@@ -812,7 +854,7 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
     try {
       for (var key in extractedVariables) {
         if (!fieldValues.containsKey(key) || fieldValues[key]!.isEmpty) {
-          fieldValues[key] = _getDefaultValueForVariable(key);
+          fieldValues[key] = getDefaultValueForVariable(key);
         }
       }
       debugPrint("Variables finales: $fieldValues");
@@ -822,7 +864,7 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
     }
   }
 
-  String _getDefaultValueForVariable(String key) {
+  String getDefaultValueForVariable(String key) {
     switch (key) {
       case 'siret':
         return '00000000000000';
@@ -897,7 +939,7 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
         .replaceAll("'", '&apos;');
   }
 
-  String _getValue(Map<String, dynamic> data, List<String> keys, [String defaultValue = '']) {
+  String getValue(Map<String, dynamic> data, List<String> keys, [String defaultValue = '']) {
     for (var key in keys) {
       if (data.containsKey(key) && data[key] != null) {
         return data[key].toString();
@@ -960,52 +1002,43 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
   //----------------------------------------------------------------------------
   // Gestion de la validation des messages
   //----------------------------------------------------------------------------
-  Future<void> handleValidation(String messageId, MessageStatus status) async {
-    if (_messageToValidate == null || _messageToValidate!.id != messageId) return;
-    try {
-      final workspaceId = await _getWorkspaceId();
-      final messageRef = _firestore
-          .collection('workspaces')
-          .doc(workspaceId)
-          .collection('chat_messages')
-          .doc(messageId);
-      await _firestore.runTransaction((transaction) async {
-        DocumentSnapshot snapshot = await transaction.get(messageRef);
-        if (!snapshot.exists) {
-          throw Exception("Le message n'existe pas!");
-        }
-        ChatMessage currentMessage = ChatMessage.fromFirestore(snapshot);
-        if (currentMessage.version != _messageToValidate!.version) {
-          throw Exception("Conflit de version détecté!");
-        }
-        transaction.update(messageRef, {
-          'status': status.toString().split('.').last,
-          'version': currentMessage.version! + 1,
-        });
+Future<void> handleValidation(String messageId, MessageStatus status) async {
+  try {
+    final workspaceId = await _getWorkspaceId();
+    final messageRef = _firestore.collection('workspaces').doc(workspaceId).collection('chat_messages').doc(messageId);
+    
+    await _firestore.runTransaction((transaction) async {
+      DocumentSnapshot snapshot = await transaction.get(messageRef);
+      if (!snapshot.exists) throw Exception("Message non trouvé");
+      
+      Map<String, dynamic> data = snapshot.data() as Map<String, dynamic>;
+      if (data['status'] == 'validated') return;
+
+      transaction.update(messageRef, {
+        'status': status.toString().split('.').last,
+        'version': (data['version'] ?? 0) + 1,
       });
-      _showValidationButtons = false;
-      _messageToValidate = null;
-      notifyListeners();
-      debugPrint('Message $messageId mis à jour avec le statut: $status');
-      if (status == MessageStatus.validated) {
-        DocumentSnapshot updatedDoc = await _firestore
-            .collection('workspaces')
-            .doc(workspaceId)
-            .collection('chat_messages')
-            .doc(messageId)
-            .get();
-        ChatMessage updatedMessage = ChatMessage.fromFirestore(updatedDoc);
-        await executeActionsFromMessage(updatedMessage);
-      }
-    } catch (e) {
-      debugPrint('Erreur lors de la validation du message: $e');
+    });
+
+    // Déclencher IMMÉDIATEMENT l'exécution des actions
+    if (status == MessageStatus.validated) {
+      DocumentSnapshot updatedDoc = await messageRef.get();
+      ChatMessage updatedMessage = ChatMessage.fromFirestore(updatedDoc);
+      
+      debugPrint('[EXECUTION] Début traitement pour message ${updatedMessage.id}');
+      await executeActionsFromMessage(updatedMessage);
     }
+
+  } catch (e) {
+    debugPrint('[ERREUR VALIDATION] $e');
   }
+}
+
 
   //----------------------------------------------------------------------------
-  // HANDLERS POUR LES DIFFÉRENTES ACTIONS
+  // HANDLERS POUR LES DIFFÉRENTES ACTIONS (rendu public)
   //----------------------------------------------------------------------------
-  Future<void> _handleCreateTask(Map<String, dynamic> data) async {
+  Future<void> handleCreateTask(Map<String, dynamic> data) async {
     try {
       final workspaceId = await _getWorkspaceId();
       final currentUser = _auth.currentUser;
@@ -1050,7 +1083,7 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
     }
   }
 
-  Future<void> _handleUpdateTask(Map<String, dynamic> data) async {
+  Future<void> handleUpdateTask(Map<String, dynamic> data) async {
     try {
       final workspaceId = await _getWorkspaceId();
       final taskId = data['taskId'];
@@ -1073,14 +1106,10 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
         int newVersion = currentVersion + 1;
         Map<String, dynamic> updateData = {};
         if (data.containsKey('title')) updateData['title'] = data['title'];
-        if (data.containsKey('description'))
-          updateData['description'] = data['description'];
-        if (data.containsKey('dueDate'))
-          updateData['dueDate'] = Timestamp.fromDate(DateTime.parse(data['dueDate']));
-        if (data.containsKey('priority'))
-          updateData['priority'] = data['priority'];
-        if (data.containsKey('status'))
-          updateData['status'] = data['status'];
+        if (data.containsKey('description')) updateData['description'] = data['description'];
+        if (data.containsKey('dueDate')) updateData['dueDate'] = Timestamp.fromDate(DateTime.parse(data['dueDate']));
+        if (data.containsKey('priority')) updateData['priority'] = data['priority'];
+        if (data.containsKey('status')) updateData['status'] = data['status'];
         updateData['version'] = newVersion;
         if (updateData.isNotEmpty) {
           transaction.update(taskRef, updateData);
@@ -1094,7 +1123,7 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
     }
   }
 
-  Future<void> _handleDeleteTask(Map<String, dynamic> data) async {
+  Future<void> handleDeleteTask(Map<String, dynamic> data) async {
     try {
       final workspaceId = await _getWorkspaceId();
       final taskId = data['taskId'];
@@ -1120,7 +1149,7 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
     }
   }
 
-  Future<void> _handleCreateEvent(Map<String, dynamic> data) async {
+  Future<void> handleCreateEvent(Map<String, dynamic> data) async {
     try {
       final workspaceId = await _getWorkspaceId();
       final currentUser = _auth.currentUser;
@@ -1153,7 +1182,7 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
     }
   }
 
-  Future<void> _handleUpdateEvent(Map<String, dynamic> data) async {
+  Future<void> handleUpdateEvent(Map<String, dynamic> data) async {
     try {
       final workspaceId = await _getWorkspaceId();
       final eventId = data['eventId'];
@@ -1176,10 +1205,8 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
         int newVersion = currentVersion + 1;
         Map<String, dynamic> updateData = {};
         if (data.containsKey('title')) updateData['title'] = data['title'];
-        if (data.containsKey('description'))
-          updateData['description'] = data['description'];
-        if (data.containsKey('date'))
-          updateData['date'] = Timestamp.fromDate(DateTime.parse(data['date']));
+        if (data.containsKey('description')) updateData['description'] = data['description'];
+        if (data.containsKey('date')) updateData['date'] = Timestamp.fromDate(DateTime.parse(data['date']));
         updateData['version'] = newVersion;
         if (updateData.isNotEmpty) {
           transaction.update(eventRef, updateData);
@@ -1193,7 +1220,7 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
     }
   }
 
-  Future<void> _handleDeleteEvent(Map<String, dynamic> data) async {
+  Future<void> handleDeleteEvent(Map<String, dynamic> data) async {
     try {
       final workspaceId = await _getWorkspaceId();
       final eventId = data['eventId'];
@@ -1219,7 +1246,7 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
     }
   }
 
-  Future<void> _handleCreateFolderWithDocument(Map<String, dynamic> data) async {
+  Future<void> handleCreateFolderWithDocument(Map<String, dynamic> data) async {
     try {
       final workspaceId = await _getWorkspaceId();
       final currentUser = _auth.currentUser;
@@ -1278,149 +1305,197 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
     }
   }
 
-  Future<void> _handleAddContact(Map<String, dynamic> data) async {
-    try {
-      final workspaceId = await _getWorkspaceId();
-      final currentUser = _auth.currentUser;
-      if (currentUser == null) {
-        debugPrint('Utilisateur non connecté.');
-        return;
-      }
-      String firstName = data['firstName'] ?? 'Prénom inconnu';
-      String lastName = data['lastName'] ?? 'Nom de famille inconnu';
-      String email = data['email'] ?? '';
-      String phone = data['phone'] ?? '';
-      String address = data['address'] ?? '';
-      String company = data['company'] ?? '';
-      String externalInfo = data['externalInfo'] ?? '';
-      debugPrint('Données reçues pour le contact: firstName=$firstName, lastName=$lastName, email=$email, phone=$phone');
-      final RegExp phoneRegex =
-          RegExp(r'^(\+33\s?|0)[1-9]([-\s]?\d{2}){4}$');
-      if (email.isNotEmpty &&
-          !RegExp(r'^[^@]+@[^@]+\.[^@]+').hasMatch(email)) {
-        debugPrint('Format d\'email invalide pour le contact "$firstName $lastName".');
-        return;
-      }
+ Future<void> handleAddContact(Map<String, dynamic> data) async {
+  try {
+    final workspaceId = await _getWorkspaceId();
+    final currentUser = _auth.currentUser;
+    if (currentUser == null) {
+      debugPrint('Utilisateur non connecté.');
+      return;
+    }
+    String firstName = data['firstName'] ?? 'Prénom inconnu';
+    String lastName = data['lastName'] ?? 'Nom de famille inconnu';
+    String email = data['email'] ?? '';
+    String rawPhone = data['phone'] ?? '';
+    String address = data['address'] ?? '';
+    String company = data['company'] ?? '';
+    String externalInfo = data['externalInfo'] ?? '';
+    debugPrint('Données reçues pour le contact: firstName=$firstName, lastName=$lastName, email=$email, phone=$rawPhone, company=$company');
+
+    // Validation de l'email
+    if (email.isNotEmpty && !RegExp(r'^[^@]+@[^@]+\.[^@]+').hasMatch(email)) {
+      debugPrint('Format d\'email invalide pour le contact "$firstName $lastName": $email');
+      return;
+    }
+
+    // Normalisation et validation du téléphone
+    String phone = _normalizePhoneNumber(rawPhone);
+    final RegExp phoneRegex = RegExp(r'^(?:\+33\s?|0)?[1-9]\d{0,2}(?:[\s.-]?\d{2}){0,4}$');
+    if (phone.isNotEmpty && !phoneRegex.hasMatch(phone)) {
+      debugPrint('Format de téléphone invalide pour le contact "$firstName $lastName": $phone. Utilisation sans téléphone.');
+      phone = '';
+    } else {
+      debugPrint('Numéro de téléphone accepté après normalisation: $phone');
+    }
+
+    await _firestore.runTransaction((transaction) async {
+      DocumentReference contactRef = _firestore
+          .collection('workspaces')
+          .doc(workspaceId)
+          .collection('contacts')
+          .doc();
+      Map<String, dynamic> contactData = {
+        'firstName': firstName,
+        'lastName': lastName,
+        'email': email,
+        'phone': phone,
+        'userId': currentUser.uid,
+        'address': address,
+        'company': company,
+        'externalInfo': externalInfo,
+        'timestamp': FieldValue.serverTimestamp(),
+        'version': 0,
+      };
+      debugPrint('Données du contact avant enregistrement: $contactData');
+      transaction.set(contactRef, contactData);
+      debugPrint('Contact "$firstName $lastName" ajouté avec ID: ${contactRef.id}');
+    });
+  } catch (e) {
+    debugPrint('Erreur lors de l\'ajout du contact: $e');
+  }
+}
+
+Future<void> handleCreateFolderAndAddContact(Map<String, dynamic> data) async {
+  try {
+    final workspaceId = await _getWorkspaceId();
+    final currentUser = _auth.currentUser;
+    if (currentUser == null) {
+      debugPrint('Utilisateur non connecté.');
+      return;
+    }
+    String folderName = data['folderName'] ?? 'Nouveau Dossier';
+    Map<String, dynamic> contactData = data['contact'] ?? {};
+
+    await _firestore.runTransaction((transaction) async {
+      // Création du dossier
+      DocumentReference folderRef = _firestore
+          .collection('workspaces')
+          .doc(workspaceId)
+          .collection('folders')
+          .doc();
+      transaction.set(folderRef, {
+        'name': folderName,
+        'userId': currentUser.uid,
+        'timestamp': FieldValue.serverTimestamp(),
+        'version': 0,
+      });
+      debugPrint('Dossier "$folderName" créé avec ID: ${folderRef.id}');
+
+      // Préparation des données du contact
+      String firstName = contactData['firstName'] ?? 'Prénom inconnu';
+      String lastName = contactData['lastName'] ?? 'Nom de famille inconnu';
+      String email = contactData['email'] ?? '';
+      String rawPhone = contactData['phone'] ?? '';
+      String address = contactData['address'] ?? '';
+      String company = contactData['company'] ?? '';
+      String externalInfo = contactData['externalInfo'] ?? '';
+
+      String phone = _normalizePhoneNumber(rawPhone);
+      final RegExp phoneRegex = RegExp(r'^(?:\+33\s?|0)?[1-9]\d{0,2}(?:[\s.-]?\d{2}){0,4}$');
       if (phone.isNotEmpty && !phoneRegex.hasMatch(phone)) {
-        debugPrint('Format de téléphone invalide pour le contact "$firstName $lastName".');
-        return;
+        debugPrint('Format de téléphone invalide pour "$firstName $lastName": $phone. Utilisation sans téléphone.');
+        phone = '';
+      } else {
+        debugPrint('Numéro de téléphone accepté après normalisation: $phone');
       }
-      await _firestore.runTransaction((transaction) async {
-        DocumentReference contactRef = _firestore
-            .collection('workspaces')
-            .doc(workspaceId)
-            .collection('contacts')
-            .doc();
-        transaction.set(contactRef, {
-          'firstName': firstName,
-          'lastName': lastName,
-          'email': email,
-          'phone': phone,
-          'userId': currentUser.uid,
-          'address': address,
-          'company': company,
-          'externalInfo': externalInfo,
-          'timestamp': FieldValue.serverTimestamp(),
-          'version': 0,
-        });
-      });
-      debugPrint('Contact "$firstName $lastName" ajouté avec succès.');
-    } catch (e) {
-      debugPrint('Erreur lors de l\'ajout du contact: $e');
+
+      if (email.isNotEmpty && !RegExp(r'^[^@]+@[^@]+\.[^@]+').hasMatch(email)) {
+        debugPrint('Format d\'email invalide pour "$firstName $lastName". Utilisation sans email.');
+        email = '';
+      }
+
+      // Création du contact
+      DocumentReference contactRef = _firestore
+          .collection('workspaces')
+          .doc(workspaceId)
+          .collection('contacts')
+          .doc();
+      Map<String, dynamic> contactPayload = {
+        'firstName': firstName,
+        'lastName': lastName,
+        'email': email,
+        'phone': phone,
+        'userId': currentUser.uid,
+        'address': address,
+        'company': company,
+        'externalInfo': externalInfo,
+        'folderId': folderRef.id,
+        'timestamp': FieldValue.serverTimestamp(),
+        'version': 0,
+      };
+      debugPrint('Données du contact avant enregistrement: $contactPayload');
+      transaction.set(contactRef, contactPayload);
+      debugPrint('Contact "$firstName $lastName" ajouté avec ID: ${contactRef.id} dans le dossier "$folderName" (folderId: ${folderRef.id}).');
+    });
+
+    // Vérification post-transaction
+    DocumentSnapshot folderSnap = await _firestore
+        .collection('workspaces')
+        .doc(workspaceId)
+        .collection('folders')
+        .where('name', isEqualTo: folderName)
+        .limit(1)
+        .get()
+        .then((snap) => snap.docs.first);
+    debugPrint('Vérification dossier après transaction: ${folderSnap.data()}');
+
+    QuerySnapshot contactSnap = await _firestore
+        .collection('workspaces')
+        .doc(workspaceId)
+        .collection('contacts')
+        .where('firstName', isEqualTo: contactData['firstName'])
+        .where('lastName', isEqualTo: contactData['lastName'])
+        .limit(1)
+        .get();
+    if (contactSnap.docs.isNotEmpty) {
+      debugPrint('Vérification contact après transaction: ${contactSnap.docs.first.data()}');
+    } else {
+      debugPrint('Contact non trouvé après transaction.');
     }
+  } catch (e) {
+    debugPrint('Erreur lors de la création du dossier et de l\'ajout du contact: $e');
+    rethrow;
+  }
+}
+
+// Méthode pour normaliser le numéro de téléphone
+String _normalizePhoneNumber(String phone) {
+  if (phone.isEmpty) return '';
+  // Supprimer tous les caractères non numériques sauf le "+"
+  String cleaned = phone.replaceAll(RegExp(r'[^0-9+]'), '');
+  
+  // Si le numéro commence par "00", remplacer par "+"
+  if (cleaned.startsWith('00')) {
+    cleaned = '+' + cleaned.substring(2);
+  }
+  
+  // Si le numéro commence par "+33" suivi d'un "0", retirer le "0"
+  if (cleaned.startsWith('+330')) {
+    cleaned = '+33' + cleaned.substring(4);
+  } else if (cleaned.startsWith('+33')) {
+    // Si ça commence par "+33" mais pas un "0", on garde tel quel
+  } else if (cleaned.length == 9 && RegExp(r'^[1-9]').hasMatch(cleaned)) {
+    // Si c'est un numéro français de 9 chiffres commençant par 1-9, ajouter "0"
+    cleaned = '0$cleaned';
   }
 
-  Future<void> _handleCreateFolderAndAddContact(Map<String, dynamic> data) async {
-    try {
-      final workspaceId = await _getWorkspaceId();
-      final currentUser = _auth.currentUser;
-      if (currentUser == null) {
-        debugPrint('Utilisateur non connecté.');
-        return;
-      }
-      String folderName = data['folderName'] ?? 'Nouveau Dossier';
-      Map<String, dynamic> contactData = data['contact'] ?? {};
-      await _firestore.runTransaction((transaction) async {
-        DocumentReference folderRef = _firestore
-            .collection('workspaces')
-            .doc(workspaceId)
-            .collection('folders')
-            .doc();
-        transaction.set(folderRef, {
-          'name': folderName,
-          'userId': currentUser.uid,
-          'timestamp': FieldValue.serverTimestamp(),
-          'version': 0,
-        });
-        debugPrint('Dossier "$folderName" créé avec succès.');
-        String firstName = contactData['firstName'] ?? 'Prénom inconnu';
-        String lastName = contactData['lastName'] ?? 'Nom de famille inconnu';
-        String email = contactData['email'] ?? '';
-        String phone = contactData['phone'] ?? '';
-        String address = contactData['address'] ?? '';
-        String company = contactData['company'] ?? '';
-        String externalInfo = contactData['externalInfo'] ?? '';
-        debugPrint('Données reçues pour le contact: firstName=$firstName, lastName=$lastName, email=$email, phone=$phone');
-        final RegExp phoneRegex =
-            RegExp(r'^(\+33\s?|0)[1-9]([-\s]?\d{2}){4}$');
-        if (email.isNotEmpty &&
-            !RegExp(r'^[^@]+@[^@]+\.[^@]+').hasMatch(email)) {
-          debugPrint('Format d\'email invalide pour le contact "$firstName $lastName".');
-          throw Exception('Format d\'email invalide.');
-        }
-        if (phone.isNotEmpty && !phoneRegex.hasMatch(phone)) {
-          debugPrint('Format de téléphone invalide pour le contact "$firstName $lastName".');
-          throw Exception('Format de téléphone invalide.');
-        }
-        DocumentReference contactRef = _firestore
-            .collection('workspaces')
-            .doc(workspaceId)
-            .collection('contacts')
-            .doc();
-        transaction.set(contactRef, {
-          'firstName': firstName,
-          'lastName': lastName,
-          'email': email,
-          'phone': phone,
-          'userId': currentUser.uid,
-          'address': address,
-          'company': company,
-          'externalInfo': externalInfo,
-          'folderId': folderRef.id,
-          'timestamp': FieldValue.serverTimestamp(),
-          'version': 0,
-        });
-        debugPrint('Contact "$firstName $lastName" ajouté avec succès dans le dossier "$folderName".');
-      });
-    } catch (e) {
-      debugPrint('Erreur lors de la création du dossier et de l\'ajout du contact: $e');
-    }
-  }
-
-  //----------------------------------------------------------------------------
-  // Nettoyage et extraction des blocs JSON de la réponse de l'IA
-  //----------------------------------------------------------------------------
-  List<Map<String, dynamic>> _extractJsonResponses(String response) {
-    response = response.replaceAll(RegExp(r'```json\s*'), '');
-    response = response.replaceAll(RegExp(r'\s*```'), '');
-    try {
-      final List<dynamic> jsonList = json.decode(response);
-      return jsonList.cast<Map<String, dynamic>>();
-    } catch (e) {
-      try {
-        final Map<String, dynamic> jsonObj = json.decode(response);
-        return [jsonObj];
-      } catch (e) {
-        debugPrint('Erreur lors de l\'extraction des JSONs: $e');
-        return [];
-      }
-    }
-  }
-
+  debugPrint('Numéro normalisé: $cleaned');
+  return cleaned;
+}
   //----------------------------------------------------------------------------
   // 13) MÉTHODE POUR VÉRIFIER SI UNE CHAÎNE EST UN JSON VALIDE
   //----------------------------------------------------------------------------
-  bool _isJson(String str) {
+  bool isJson(String str) {
     try {
       json.decode(str);
       return true;
@@ -1450,7 +1525,7 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
   }
 
   Future<void> modifyAndExecuteActions(ChatMessage message, String newContent) async {
-    if (!_isJson(newContent)) {
+    if (!isJson(newContent)) {
       throw Exception('Le contenu modifié doit être un JSON valide.');
     }
     await updateMessage(message.id, newContent, isDraft: false);
@@ -1476,8 +1551,7 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
   Future<void> updateMessage(String messageId, String newContent, {bool isDraft = false}) async {
     try {
       final workspaceId = await _getWorkspaceId();
-      DocumentReference messageRef =
-          _firestore.collection('workspaces').doc(workspaceId).collection('chat_messages').doc(messageId);
+      DocumentReference messageRef = _firestore.collection('workspaces').doc(workspaceId).collection('chat_messages').doc(messageId);
       DocumentSnapshot doc = await messageRef.get();
       if (!doc.exists) {
         debugPrint('Message avec ID $messageId non trouvé.');
@@ -1510,6 +1584,26 @@ Si plusieurs actions sont nécessaires, encapsule-les dans une liste comme suit 
     } catch (e) {
       debugPrint('Erreur lors de la mise à jour du message: $e');
       throw Exception('Erreur lors de la mise à jour du message: $e');
+    }
+  }
+
+  //----------------------------------------------------------------------------
+  // Nettoyage et extraction des blocs JSON de la réponse de l'IA
+  //----------------------------------------------------------------------------
+  List<Map<String, dynamic>> _extractJsonResponses(String response) {
+    response = response.replaceAll(RegExp(r'```json\s*'), '');
+    response = response.replaceAll(RegExp(r'\s*```'), '');
+    try {
+      final List<dynamic> jsonList = json.decode(response);
+      return jsonList.cast<Map<String, dynamic>>();
+    } catch (e) {
+      try {
+        final Map<String, dynamic> jsonObj = json.decode(response);
+        return [jsonObj];
+      } catch (e) {
+        debugPrint('Erreur lors de l\'extraction des JSONs: $e');
+        return [];
+      }
     }
   }
 

@@ -18,6 +18,18 @@ class _LoginPageState extends State<LoginPage> {
   bool _isLoading = false;
 
   @override
+  void initState() {
+    super.initState();
+    // Charger la préférence "Se souvenir de moi" au démarrage
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final authService = Provider.of<AuthService>(context, listen: false);
+      setState(() {
+        _rememberMe = authService.rememberMe;
+      });
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final authService = Provider.of<AuthService>(context);
 
@@ -106,7 +118,7 @@ class _LoginPageState extends State<LoginPage> {
                                 rememberDevice: _rememberMe,
                               );
 
-                              Navigator.pushReplacementNamed(context, '/friends');
+                              Navigator.pushReplacementNamed(context, '/profile'); // Changé pour '/profile' au lieu de '/friends'
                             } catch (e) {
                               if (!mounted) return;
                               ScaffoldMessenger.of(context).showSnackBar(
@@ -142,7 +154,7 @@ class _LoginPageState extends State<LoginPage> {
                           try {
                             bool googleSignedIn = await authService.signInWithGoogle();
                             if (googleSignedIn) {
-                              Navigator.pushReplacementNamed(context, '/friends');
+                              Navigator.pushReplacementNamed(context, '/profile'); // Changé pour '/profile'
                             } else {
                               if (!mounted) return;
                               ScaffoldMessenger.of(context).showSnackBar(

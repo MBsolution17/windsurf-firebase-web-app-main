@@ -1,9 +1,9 @@
-// lib/pages/dashboard_page.dart
-
 import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:html' as html; // Pour les opérations de téléchargement sur le web
+import 'dart:js' as js; // Ajout pour l'interaction JavaScript
 import 'package:firebase_web_app/services/speech_recognition_js.dart';
+import 'package:firebase_web_app/theme_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:fl_chart/fl_chart.dart';
@@ -31,18 +31,17 @@ import '../services/auth_service.dart';
 import 'contact_page.dart';
 import 'profile_page.dart';
 import '../widgets/profile_avatar.dart';
+import 'onboarding/onboarding_page.dart';
 
 class DashboardItem {
   final String title;
   final IconData icon;
   final String routeName;
-  final Color color;
 
   DashboardItem({
     required this.title,
     required this.icon,
     required this.routeName,
-    required this.color,
   });
 }
 
@@ -58,9 +57,18 @@ class DashboardPage extends StatefulWidget {
   _DashboardPageState createState() => _DashboardPageState();
 }
 
+
 class _DashboardPageState extends State<DashboardPage>
     with SingleTickerProviderStateMixin {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+
+  void _openReconfigureWorkspace() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => OnboardingPage(workspaceId: widget.workspaceId),
+      ),
+    );
+  }
 
   AIService? _aiService;
   WebSpeechRecognitionService? _speechService;
@@ -70,6 +78,7 @@ class _DashboardPageState extends State<DashboardPage>
   final ScrollController _scrollController = ScrollController();
 
   bool _isListening = false;
+  bool _isDarkTheme = false;
 
   late AnimationController _animationController;
   late Animation<double> _animation;
@@ -91,7 +100,6 @@ class _DashboardPageState extends State<DashboardPage>
   DateTime? _selectedDay;
   Map<DateTime, List<Task>> _tasksByDate = {};
 
-  String _aiResponse = '';
   String _lastError = '';
 
   final AudioPlayer _audioPlayer = AudioPlayer();
@@ -103,70 +111,85 @@ class _DashboardPageState extends State<DashboardPage>
   double _selectedSpeakingRate = 1.0;
   double _selectedPitch = 1.0;
 
+  // Nouvelles variables pour les périphériques audio
+  List<html.MediaDeviceInfo> _inputDevices = [];
+  List<html.MediaDeviceInfo> _outputDevices = [];
+  String? _selectedInputDeviceId;
+  String? _selectedOutputDeviceId;
+
   static const String prefSelectedVoiceName = 'selectedVoiceName';
   static const String prefSelectedVoiceId = 'selectedVoiceId';
-
-  // Couleur principale et neutre (charte gris foncé)
-  final Color primaryColor = Colors.grey[800]!;
-  final Color neutralDark = Colors.grey[800]!;
+  static const String prefThemeMode = 'themeMode';
+  // Nouvelles constantes pour les préférences de périphériques audio
+  static const String prefInputDeviceId = 'selectedInputDeviceId';
+  static const String prefOutputDeviceId = 'selectedOutputDeviceId';
 
   final List<DashboardItem> dashboardItems = [
     DashboardItem(
-      title: 'Channels',
+      title: 'Canaux',
       icon: Icons.chat,
       routeName: '/channel_list',
-      color: Colors.grey[600]!,
     ),
     DashboardItem(
-      title: 'Friends',
+      title: 'Collaborateurs',
       icon: Icons.people,
       routeName: '/friends',
-      color: Colors.grey[600]!,
     ),
     DashboardItem(
-      title: 'Calendar',
+      title: 'Calendrier',
       icon: Icons.calendar_today,
       routeName: '/calendar',
-      color: Colors.grey[600]!,
-    ),
-    DashboardItem(
-      title: 'Task Tracker',
-      icon: Icons.check_circle,
-      routeName: '/task_tracker',
-      color: Colors.grey[600]!,
     ),
     DashboardItem(
       title: 'Documents',
       icon: Icons.folder,
       routeName: '/documents',
-      color: Colors.grey[600]!,
     ),
     DashboardItem(
-      title: 'Analytics',
+      title: 'Analyse',
       icon: Icons.analytics,
       routeName: '/analytics',
-      color: Colors.grey[600]!,
     ),
     DashboardItem(
       title: 'Contacts',
       icon: Icons.contact_mail,
       routeName: '/contact_page',
-      color: Colors.grey[600]!,
     ),
   ];
 
-  // Utilisation de '/documents' pour les actions relatives aux documents
   final Map<String, String> actionRouteMap = {
-  'create_task': '/calendar', // Mise à jour ici
-  'add_contact': '/contact_page',
-  'create_folder_with_document': '/documents',
-  'create_folder_and_add_contact': '/documents',
-  'modify_document': '/documents',
-};
+    'create_task': '/calendar',
+    'add_contact': '/contact_page',
+    'create_folder_with_document': '/documents',
+    'create_folder_and_add_contact': '/documents',
+    'modify_document': '/documents',
+  };
 
   late String workspaceId;
 
   List<UserModel> _connectedUsers = [];
+
+  // Variable pour suivre le dernier message lu par TTS
+  String? _lastTtsMessageId;
+
+  Future<Uint8List?> _loadProfileImage(String? photoURL) async {
+    if (photoURL == null || !kIsWeb) return null;
+    try {
+      final response = await http.get(
+        Uri.parse(
+            'https://getprofileimage-iu4ydislpq-uc.a.run.app?url=${Uri.encodeComponent(photoURL)}'),
+      );
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        if (json['imageBase64'] != null) {
+          return base64Decode(json['imageBase64']);
+        }
+      }
+    } catch (e) {
+      debugPrint("Erreur lors du chargement de l'image via Firebase Function : $e");
+    }
+    return null;
+  }
 
   @override
   void initState() {
@@ -176,7 +199,8 @@ class _DashboardPageState extends State<DashboardPage>
     _focusedDay = DateTime.now();
     _calendarFormat = CalendarFormat.month;
 
-    // Actualisation en temps réel des tâches
+    _loadThemePreference();
+
     _firestore
         .collection('workspaces')
         .doc(workspaceId)
@@ -186,7 +210,8 @@ class _DashboardPageState extends State<DashboardPage>
       final Map<DateTime, List<Task>> tasksMap = {};
       for (var doc in snapshot.docs) {
         Task task = Task.fromFirestore(doc);
-        DateTime date = DateTime(task.dueDate.year, task.dueDate.month, task.dueDate.day);
+        DateTime date =
+            DateTime(task.dueDate.year, task.dueDate.month, task.dueDate.day);
         tasksMap[date] = (tasksMap[date] ?? [])..add(task);
       }
       if (mounted) {
@@ -210,14 +235,14 @@ class _DashboardPageState extends State<DashboardPage>
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       _aiService = Provider.of<AIService>(context, listen: false);
-      _speechService =
-          Provider.of<WebSpeechRecognitionService>(context, listen: false);
+      _speechService = Provider.of<WebSpeechRecognitionService>(context, listen: false);
 
       if (_speechService != null) {
         bool available = await _speechService!.initialize();
         if (!available && mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('La reconnaissance vocale n\'est pas disponible.')),
+            const SnackBar(
+                content: Text('La reconnaissance vocale n\'est pas disponible.')),
           );
         }
       }
@@ -243,6 +268,9 @@ class _DashboardPageState extends State<DashboardPage>
           });
         }
         _loadSavedVoice();
+        
+        // Charger les périphériques audio
+        _loadAudioDevices();
       } else {
         _loadSavedVoice();
       }
@@ -255,23 +283,17 @@ class _DashboardPageState extends State<DashboardPage>
           setState(() {
             _isListening = false;
             _lastError = '';
-            _aiResponse = 'En attente de la réponse de l\'IA...';
           });
+          if (_chatController.text.isEmpty) {
+            _chatController.text = transcript;
+          }
           try {
             if (_aiService == null) return;
-            ChatMessage aiMessage = await _aiService!.sendMessage(transcript);
-            String responseContent = aiMessage.content;
-            if (!mounted) return;
-            setState(() {
-              _aiResponse = responseContent;
-            });
-            if (_isTtsEnabled) {
-              await _speak(responseContent);
-            }
+            await _sendMessage(transcript);
           } catch (e) {
             if (!mounted) return;
             setState(() {
-              _aiResponse = 'Erreur lors de la communication avec l\'IA.';
+              _lastError = 'Erreur lors de la communication avec l\'IA: $e';
             });
           }
         };
@@ -281,7 +303,6 @@ class _DashboardPageState extends State<DashboardPage>
           setState(() {
             _lastError = error;
             _isListening = false;
-            _aiResponse = '';
           });
         };
       }
@@ -294,6 +315,98 @@ class _DashboardPageState extends State<DashboardPage>
     });
 
     _listenToValidatedMessages();
+  }
+
+  // Méthode pour charger les périphériques audio
+  Future<void> _loadAudioDevices() async {
+    if (kIsWeb) {
+      try {
+        // Demander la permission d'accéder aux périphériques
+        await html.window.navigator.mediaDevices?.getUserMedia({
+          'audio': true,
+        });
+        
+        // Récupérer la liste des périphériques
+        final devices = await html.window.navigator.mediaDevices?.enumerateDevices();
+        
+        if (devices != null) {
+          setState(() {
+            _inputDevices = devices.where((device) => device.kind == 'audioinput').cast<html.MediaDeviceInfo>().toList();
+            _outputDevices = devices.where((device) => device.kind == 'audiooutput').cast<html.MediaDeviceInfo>().toList();
+          });
+          
+          // Charger les préférences sauvegardées
+          final prefs = await SharedPreferences.getInstance();
+          _selectedInputDeviceId = prefs.getString(prefInputDeviceId);
+          _selectedOutputDeviceId = prefs.getString(prefOutputDeviceId);
+          
+          // Si aucun appareil n'est sélectionné, utiliser les appareils par défaut
+          if (_selectedInputDeviceId == null && _inputDevices.isNotEmpty) {
+            _selectedInputDeviceId = _inputDevices.first.deviceId;
+          }
+          if (_selectedOutputDeviceId == null && _outputDevices.isNotEmpty) {
+            _selectedOutputDeviceId = _outputDevices.first.deviceId;
+          }
+          
+          // Configurer le service de reconnaissance vocale avec le périphérique par défaut
+          if (_speechService != null && _selectedInputDeviceId != null) {
+            try {
+              js.context.callMethod('updateSpeechRecognitionDevice', [_selectedInputDeviceId]);
+            } catch (e) {
+              debugPrint("Erreur lors de la configuration du microphone: $e");
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint("Erreur lors de l'accès aux périphériques audio: $e");
+      }
+    }
+  }
+  
+  // Méthode pour sauvegarder les préférences de périphérique audio
+  Future<void> _saveAudioDevicePreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (_selectedInputDeviceId != null) {
+      await prefs.setString(prefInputDeviceId, _selectedInputDeviceId!);
+      
+      // Configurer le service de reconnaissance vocale
+      if (_speechService != null) {
+        try {
+          js.context.callMethod('updateSpeechRecognitionDevice', [_selectedInputDeviceId]);
+          
+          // Si la reconnaissance est active, la redémarrer pour appliquer le changement
+          if (_isListening) {
+            _toggleAssistantListening();
+            _toggleAssistantListening();
+          }
+        } catch (e) {
+          debugPrint("Erreur lors de la configuration du microphone: $e");
+        }
+      }
+    }
+    
+    if (_selectedOutputDeviceId != null) {
+      await prefs.setString(prefOutputDeviceId, _selectedOutputDeviceId!);
+    }
+  }
+
+  void _loadThemePreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _isDarkTheme = prefs.getBool(prefThemeMode) ?? false;
+    });
+  }
+
+  void _saveThemePreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(prefThemeMode, _isDarkTheme);
+  }
+
+  void _toggleTheme() {
+    setState(() {
+      _isDarkTheme = !_isDarkTheme;
+      _saveThemePreference();
+    });
   }
 
   @override
@@ -464,8 +577,10 @@ class _DashboardPageState extends State<DashboardPage>
         .doc(workspaceId)
         .collection('folders')
         .add({
-      'folderName': folderName,
-      'createdAt': FieldValue.serverTimestamp(),
+      'name': folderName,
+      'userId': user.uid,
+      'timestamp': FieldValue.serverTimestamp(),
+      'version': 0,
     });
     String firstName = contactData['firstName'] ?? '';
     String lastName = contactData['lastName'] ?? '';
@@ -487,7 +602,8 @@ class _DashboardPageState extends State<DashboardPage>
       'company': company,
       'externalInfo': externalInfo,
       'folderId': folderRef.id,
-      'createdAt': FieldValue.serverTimestamp(),
+      'timestamp': FieldValue.serverTimestamp(),
+      'version': 0,
     });
   }
 
@@ -541,15 +657,14 @@ class _DashboardPageState extends State<DashboardPage>
 
   Future<void> _speak(String text) async {
     if (!_isTtsEnabled) return;
-    String textToSpeak = isJson(text) ? jsonToSentence(text) : text;
     if (kIsWeb) {
-      _speakWeb(textToSpeak);
+      _speakWeb(text);
     } else {
       try {
         HttpsCallable callable =
             FirebaseFunctions.instance.httpsCallable('synthesizeSpeech');
         final results = await callable.call(<String, dynamic>{
-          'text': textToSpeak,
+          'text': text,
           'languageCode': 'fr-FR',
           'voiceName': _selectedVoiceName,
           'speakingRate': _selectedSpeakingRate,
@@ -572,11 +687,21 @@ class _DashboardPageState extends State<DashboardPage>
     if (synth?.speaking ?? false) {
       synth?.cancel();
     }
+    
     final utterance = html.SpeechSynthesisUtterance(text)
       ..lang = 'fr-FR'
       ..rate = _selectedSpeakingRate
       ..pitch = _selectedPitch
       ..voice = _selectedVoice;
+    
+    if (_selectedOutputDeviceId != null) {
+      try {
+        js.context.callMethod('setSpeechSynthesisOutputDevice', [_selectedOutputDeviceId]);
+      } catch (e) {
+        debugPrint("Erreur lors de la configuration de la sortie audio: $e");
+      }
+    }
+    
     synth?.speak(utterance);
   }
 
@@ -592,129 +717,213 @@ class _DashboardPageState extends State<DashboardPage>
     showDialog(
       context: context,
       builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('Paramètres de Voix'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (kIsWeb) ...[
-                  DropdownButton<html.SpeechSynthesisVoice>(
-                    value: _selectedVoice,
-                    hint: const Text('Sélectionnez une voix'),
-                    isExpanded: true,
-                    items: _availableVoices.map((voice) {
-                      return DropdownMenuItem<html.SpeechSynthesisVoice>(
-                        value: voice,
-                        child: Text(voice.name ?? 'Voix inconnue'),
-                      );
-                    }).toList(),
-                    onChanged: (voice) {
-                      if (!mounted) return;
-                      setState(() {
-                        _selectedVoice = voice;
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 20),
-                ] else ...[
-                  DropdownButtonFormField<String>(
-                    value: _selectedVoiceName.isNotEmpty ? _selectedVoiceName : null,
-                    decoration: const InputDecoration(
-                      labelText: 'Sélectionnez une voix',
-                      border: OutlineInputBorder(),
-                    ),
-                    items: const [
-                      DropdownMenuItem(
-                        value: 'fr-FR-Wavenet-D',
-                        child: Text('Voix A'),
-                      ),
-                      DropdownMenuItem(
-                        value: 'fr-FR-Wavenet-B',
-                        child: Text('Voix B'),
-                      ),
-                    ],
-                    onChanged: (value) {
-                      if (!mounted) return;
-                      setState(() {
-                        _selectedVoiceName = value ?? '';
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 20),
-                ],
-                Row(
+        return StatefulBuilder(
+          builder: (context, setState) {
+            // Charger les périphériques audio au premier affichage du dialogue
+            if (kIsWeb && (_inputDevices.isEmpty || _outputDevices.isEmpty)) {
+              WidgetsBinding.instance.addPostFrameCallback((_) async {
+                await _loadAudioDevices();
+                setState(() {}); // Mettre à jour l'interface après le chargement
+              });
+            }
+            
+            return AlertDialog(
+              title: const Text('Paramètres Audio'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Vitesse:'),
-                    Expanded(
-                      child: Slider(
-                        value: _selectedSpeakingRate,
-                        min: 0.5,
-                        max: 2.0,
-                        divisions: 15,
-                        label: _selectedSpeakingRate.toStringAsFixed(1),
-                        onChanged: (value) {
-                          if (!mounted) return;
+                    // Section pour les voix de synthèse
+                    const Text(
+                      'Voix de synthèse',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                    ),
+                    const SizedBox(height: 10),
+                    if (kIsWeb) ...[
+                      DropdownButton<html.SpeechSynthesisVoice>(
+                        value: _selectedVoice,
+                        hint: const Text('Sélectionnez une voix'),
+                        isExpanded: true,
+                        items: _availableVoices.map((voice) {
+                          return DropdownMenuItem<html.SpeechSynthesisVoice>(
+                            value: voice,
+                            child: Text(voice.name ?? 'Voix inconnue'),
+                          );
+                        }).toList(),
+                        onChanged: (voice) {
                           setState(() {
-                            _selectedSpeakingRate = value;
+                            _selectedVoice = voice;
                           });
                         },
                       ),
+                      const SizedBox(height: 20),
+                    ] else ...[
+                      DropdownButtonFormField<String>(
+                        value: _selectedVoiceName.isNotEmpty ? _selectedVoiceName : null,
+                        decoration: const InputDecoration(
+                          labelText: 'Sélectionnez une voix',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: const [
+                          DropdownMenuItem(
+                            value: 'fr-FR-Wavenet-D',
+                            child: Text('Voix A'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'fr-FR-Wavenet-B',
+                            child: Text('Voix B'),
+                          ),
+                        ],
+                        onChanged: (value) {
+                          setState(() {
+                            _selectedVoiceName = value ?? '';
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 20),
+                    ],
+                    
+                    // Réglages de vitesse et hauteur
+                    Row(
+                      children: [
+                        const Text('Vitesse:'),
+                        Expanded(
+                          child: Slider(
+                            value: _selectedSpeakingRate,
+                            min: 0.5,
+                            max: 2.0,
+                            divisions: 15,
+                            label: _selectedSpeakingRate.toStringAsFixed(1),
+                            onChanged: (value) {
+                              setState(() {
+                                _selectedSpeakingRate = value;
+                              });
+                            },
+                          ),
+                        ),
+                        Text('${_selectedSpeakingRate.toStringAsFixed(1)}x'),
+                      ],
                     ),
-                    Text('${_selectedSpeakingRate.toStringAsFixed(1)}x'),
+                    
+                    if (kIsWeb) ...[
+                      Row(
+                        children: [
+                          const Text('Hauteur (Pitch):'),
+                          Expanded(
+                            child: Slider(
+                              value: _selectedPitch,
+                              min: 0.5,
+                              max: 2.0,
+                              divisions: 15,
+                              label: _selectedPitch.toStringAsFixed(1),
+                              onChanged: (value) {
+                                setState(() {
+                                  _selectedPitch = value;
+                                });
+                              },
+                            ),
+                          ),
+                          Text(_selectedPitch.toStringAsFixed(1)),
+                        ],
+                      ),
+                    ],
+                    
+                    const SizedBox(height: 20),
+                    const Divider(),
+                    const SizedBox(height: 10),
+                    
+                    // Nouvelle section pour la sélection des périphériques d'entrée (microphones)
+                    if (kIsWeb) ...[
+                      const Text(
+                        'Microphone',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                      ),
+                      const SizedBox(height: 10),
+                      DropdownButton<String>(
+                        value: _selectedInputDeviceId,
+                        hint: const Text('Sélectionnez un microphone'),
+                        isExpanded: true,
+                        items: _inputDevices.map((device) {
+                          return DropdownMenuItem<String>(
+                            value: device.deviceId,
+                            child: Text(device.label?.isNotEmpty == true
+                                ? device.label!
+                                : 'Microphone ${_inputDevices.indexOf(device) + 1}'),
+                          );
+                        }).toList(),
+                        onChanged: (deviceId) {
+                          setState(() {
+                            _selectedInputDeviceId = deviceId;
+                          });
+                        },
+                      ),
+                      if (_inputDevices.isEmpty) 
+                        const Text('Aucun microphone détecté. Vérifiez les permissions du navigateur.', 
+                          style: TextStyle(color: Colors.red, fontSize: 12)),
+                      const SizedBox(height: 20),
+                      
+                      // Nouvelle section pour la sélection des périphériques de sortie (haut-parleurs)
+                      const Text(
+                        'Sortie audio',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                      ),
+                      const SizedBox(height: 10),
+                      DropdownButton<String>(
+                        value: _selectedOutputDeviceId,
+                        hint: const Text('Sélectionnez une sortie audio'),
+                        isExpanded: true,
+                        items: _outputDevices.map((device) {
+                          return DropdownMenuItem<String>(
+                            value: device.deviceId,
+                            child: Text(device.label?.isNotEmpty == true
+                                ? device.label!
+                                : 'Sortie audio ${_outputDevices.indexOf(device) + 1}'),
+                          );
+                        }).toList(),
+                        onChanged: (deviceId) {
+                          setState(() {
+                            _selectedOutputDeviceId = deviceId;
+                          });
+                        },
+                      ),
+                      if (_outputDevices.isEmpty) 
+                        const Text('Aucune sortie audio détectée. Vérifiez les permissions du navigateur.', 
+                          style: TextStyle(color: Colors.red, fontSize: 12)),
+                    ],
+                    
+                    const SizedBox(height: 20),
+                    ElevatedButton(
+                      onPressed: () async {
+                        const sampleText = 'Bonjour, ceci est un exemple de voix.';
+                        await _speak(sampleText);
+                      },
+                      child: const Text('Écouter un exemple'),
+                    ),
                   ],
                 ),
-                const SizedBox(height: 20),
-                if (kIsWeb) ...[
-                  Row(
-                    children: [
-                      const Text('Hauteur (Pitch):'),
-                      Expanded(
-                        child: Slider(
-                          value: _selectedPitch,
-                          min: 0.5,
-                          max: 2.0,
-                          divisions: 15,
-                          label: _selectedPitch.toStringAsFixed(1),
-                          onChanged: (value) {
-                            if (!mounted) return;
-                            setState(() {
-                              _selectedPitch = value;
-                            });
-                          },
-                        ),
-                      ),
-                      Text(_selectedPitch.toStringAsFixed(1)),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Fermer'),
+                ),
                 ElevatedButton(
-                  onPressed: () async {
-                    const sampleText = 'Bonjour, ceci est un exemple de voix.';
-                    await _speak(sampleText);
+                  onPressed: () {
+                    _saveVoiceSelection();
+                    if (kIsWeb) {
+                      _saveAudioDevicePreferences();
+                    }
+                    Navigator.of(context).pop();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Paramètres audio mis à jour')),
+                    );
                   },
-                  child: const Text('Écouter un exemple'),
+                  child: const Text('Appliquer'),
                 ),
               ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Fermer'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                _saveVoiceSelection();
-                Navigator.of(context).pop();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Paramètres de voix mis à jour')),
-                );
-              },
-              child: const Text('Appliquer'),
-            ),
-          ],
+            );
+          },
         );
       },
     );
@@ -745,34 +954,42 @@ class _DashboardPageState extends State<DashboardPage>
   Future<void> _sendMessage(String message) async {
     if (_aiService == null) return;
     try {
-      ChatMessage aiMessage = await _aiService!.sendMessage(message);
-      String aiResponse = aiMessage.content;
-      if (!mounted) return;
-      setState(() {
-        _chatController.clear();
-        _aiResponse = aiResponse;
-      });
-      if (_isTtsEnabled) {
-        await _speak(aiResponse);
-      }
+      await _aiService!.sendMessage(message);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erreur lors de l\'envoi du message: $e')),
-      );
+      setState(() {
+        _lastError = 'Erreur lors de l\'envoi du message: $e';
+      });
     }
   }
 
   Color _getStatusColor(TaskStatus status) {
     switch (status) {
       case TaskStatus.Pending:
-        return Colors.orange;
+        return Colors.orange[300]!;
       case TaskStatus.InProgress:
         return Colors.blue;
       case TaskStatus.Done:
-        return Colors.green;
+        return Colors.green[300]!;
+      case TaskStatus.PendingValidation:
+        return Colors.blueGrey;
       default:
         return Colors.grey;
+    }
+  }
+
+  String _translateTaskStatus(TaskStatus status) {
+    switch (status) {
+      case TaskStatus.Pending:
+        return 'En attente';
+      case TaskStatus.InProgress:
+        return 'En cours';
+      case TaskStatus.Done:
+        return 'Terminé';
+      case TaskStatus.PendingValidation:
+        return 'À valider';
+      default:
+        return 'Inconnu';
     }
   }
 
@@ -788,11 +1005,12 @@ class _DashboardPageState extends State<DashboardPage>
               children: [
                 Text('Description: ${task.description}'),
                 const SizedBox(height: 6),
-                Text('Date d\'échéance: ${DateFormat('dd/MM/yyyy').format(task.dueDate)}'),
+                Text(
+                    'Date d\'échéance: ${DateFormat('dd/MM/yyyy').format(task.dueDate)}'),
                 const SizedBox(height: 6),
                 Text('Priorité: ${task.priority.toString().split('.').last}'),
                 const SizedBox(height: 6),
-                Text('Statut: ${task.status.toString().split('.').last}'),
+                Text('Statut: ${_translateTaskStatus(task.status)}'),
               ],
             ),
           ),
@@ -811,8 +1029,7 @@ class _DashboardPageState extends State<DashboardPage>
     List<Task> upcomingTasks = _tasksByDate.values
         .expand((tasks) => tasks)
         .where((task) =>
-            task.dueDate.isAfter(DateTime.now()) &&
-            task.status != TaskStatus.Done)
+            task.dueDate.isAfter(DateTime.now()) && task.status != TaskStatus.Done)
         .toList();
     upcomingTasks.sort((a, b) => a.dueDate.compareTo(b.dueDate));
     upcomingTasks = upcomingTasks.take(20).toList();
@@ -823,13 +1040,12 @@ class _DashboardPageState extends State<DashboardPage>
         borderRadius: BorderRadius.circular(12),
       ),
       clipBehavior: Clip.hardEdge,
-      color: Colors.white,
+      color: Theme.of(context).cardColor,
       child: Container(
         height: 300,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
             Padding(
               padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
               child: Row(
@@ -840,19 +1056,19 @@ class _DashboardPageState extends State<DashboardPage>
                     style: GoogleFonts.roboto(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
-                      color: Colors.grey[800],
+                      color: Theme.of(context).textTheme.bodyLarge!.color,
                     ),
                   ),
-                 TextButton(
-  onPressed: () {
-    Navigator.pushNamed(context, '/calendar',
-        arguments: {'workspaceId': workspaceId});
-  },
-  style: TextButton.styleFrom(
-    foregroundColor: Colors.grey[700],
-  ),
-  child: const Text('Voir Tout'),
-),
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pushNamed(context, '/calendar',
+                          arguments: {'workspaceId': workspaceId});
+                    },
+                    style: TextButton.styleFrom(
+                      foregroundColor: Theme.of(context).textTheme.bodyMedium!.color,
+                    ),
+                    child: const Text('Voir Tout'),
+                  ),
                 ],
               ),
             ),
@@ -865,7 +1081,9 @@ class _DashboardPageState extends State<DashboardPage>
                   itemBuilder: (context, index) {
                     final task = upcomingTasks[index];
                     return Card(
-                      color: const Color.fromARGB(255, 210, 210, 210),
+                      color: Theme.of(context).brightness == Brightness.dark
+                          ? Colors.grey[800]
+                          : const Color.fromARGB(255, 210, 210, 210),
                       elevation: 2,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8),
@@ -881,7 +1099,7 @@ class _DashboardPageState extends State<DashboardPage>
                               style: GoogleFonts.roboto(
                                 fontSize: 14,
                                 fontWeight: FontWeight.bold,
-                                color: Colors.grey[900],
+                                color: Theme.of(context).textTheme.bodyLarge!.color,
                               ),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
@@ -891,7 +1109,7 @@ class _DashboardPageState extends State<DashboardPage>
                               task.description,
                               style: GoogleFonts.roboto(
                                 fontSize: 12,
-                                color: Colors.grey[800],
+                                color: Theme.of(context).textTheme.bodyMedium!.color,
                               ),
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
@@ -904,20 +1122,52 @@ class _DashboardPageState extends State<DashboardPage>
                                   'À faire le ${DateFormat('dd/MM/yyyy').format(task.dueDate)}',
                                   style: GoogleFonts.roboto(
                                     fontSize: 12,
-                                    color: Colors.grey[800],
+                                    color: Theme.of(context).textTheme.bodyMedium!.color,
                                   ),
                                 ),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: _getStatusColor(task.status),
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
-                                  child: Text(
-                                    task.status.toString().split('.').last,
-                                    style: GoogleFonts.roboto(
-                                      color: Colors.grey[900],
-                                      fontSize: 10,
+                                GestureDetector(
+                                  onTap: task.status == TaskStatus.PendingValidation
+                                      ? () async {
+                                          try {
+                                            await _firestore
+                                                .collection('workspaces')
+                                                .doc(workspaceId)
+                                                .collection('tasks')
+                                                .doc(task.id)
+                                                .update({
+                                              'status': 'Done',
+                                            });
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              const SnackBar(
+                                                  content:
+                                                      Text('Tâche marquée comme terminée.')),
+                                            );
+                                          } catch (e) {
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              SnackBar(
+                                                  content: Text(
+                                                      'Erreur lors de la mise à jour: $e')),
+                                            );
+                                          }
+                                        }
+                                      : null,
+                                  child: Container(
+                                    constraints: const BoxConstraints(minWidth: 60),
+                                    padding:
+                                        const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: _getStatusColor(task.status),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Center(
+                                      child: Text(
+                                        _translateTaskStatus(task.status),
+                                        style: GoogleFonts.roboto(
+                                          color: Colors.white,
+                                          fontSize: 12,
+                                        ),
+                                        textAlign: TextAlign.center,
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -930,7 +1180,7 @@ class _DashboardPageState extends State<DashboardPage>
                                 onPressed: () => _showTaskDetailsDialog(task),
                                 style: ElevatedButton.styleFrom(
                                   minimumSize: const Size(60, 25),
-                                  backgroundColor: Colors.grey[800],
+                                  backgroundColor: Theme.of(context).primaryColor,
                                   foregroundColor: Colors.white,
                                   textStyle: const TextStyle(fontSize: 12),
                                 ),
@@ -1044,7 +1294,7 @@ class _DashboardPageState extends State<DashboardPage>
                 SelectableText(
                   actionSentence,
                   style: GoogleFonts.roboto(
-                    color: Colors.black87,
+                    color: Theme.of(context).textTheme.bodyLarge!.color,
                     fontSize: 14,
                   ),
                 ),
@@ -1060,7 +1310,9 @@ class _DashboardPageState extends State<DashboardPage>
                     style: GoogleFonts.roboto(fontSize: 14, color: Colors.white),
                   ),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color.fromARGB(255, 104, 104, 104),
+                    backgroundColor: Theme.of(context).brightness == Brightness.dark
+                        ? Colors.grey[800]
+                        : Theme.of(context).primaryColor,
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(8),
@@ -1075,7 +1327,7 @@ class _DashboardPageState extends State<DashboardPage>
             return SelectableText(
               actionSentence,
               style: GoogleFonts.roboto(
-                color: Colors.black87,
+                color: Theme.of(context).textTheme.bodyLarge!.color,
                 fontSize: 14,
               ),
             );
@@ -1093,26 +1345,40 @@ class _DashboardPageState extends State<DashboardPage>
     }
   }
 
+  void _handleNewMessage(ChatMessage message) async {
+    if (_isTtsEnabled &&
+        message.type == MessageType.ai &&
+        message.timestamp.isAfter(DateTime.now().subtract(const Duration(seconds: 5))) &&
+        _lastTtsMessageId != message.id) {
+      _lastTtsMessageId = message.id;
+      if (isJson(message.content)) {
+        await _speak(jsonToSentence(message.content));
+      } else {
+        await _speak(message.content);
+      }
+    }
+  }
+
   Widget _buildChatAssistantSection() {
     if (_aiService == null) {
-      return const Center(child: CircularProgressIndicator());
+      return const Center(child: Text('Service IA non disponible'));
     }
     return Card(
       elevation: 4,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      color: Colors.white,
+      color: Theme.of(context).cardColor,
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Assistant IA',
-              style: GoogleFonts.roboto(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-                color: neutralDark,
-              ),
+            Image.asset(
+              'assets/images/Orion.png',
+              height: 30,
+              fit: BoxFit.contain,
+              color: Theme.of(context).brightness == Brightness.dark
+                  ? const Color.fromARGB(255, 168, 168, 168)
+                  : null,
             ),
             const SizedBox(height: 10),
             Flexible(
@@ -1128,7 +1394,13 @@ class _DashboardPageState extends State<DashboardPage>
                     );
                   }
                   if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(child: CircularProgressIndicator());
+                    return Center(
+                      child: Text(
+                        'Chargement des messages...',
+                        style: GoogleFonts.roboto(
+                            color: Theme.of(context).textTheme.bodyMedium!.color),
+                      ),
+                    );
                   }
                   if (!snapshot.hasData || snapshot.data!.isEmpty) {
                     return Center(
@@ -1136,12 +1408,13 @@ class _DashboardPageState extends State<DashboardPage>
                         'Aucun message trouvé.',
                         style: GoogleFonts.roboto(
                           fontSize: 16,
-                          color: Colors.grey[600],
+                          color: Theme.of(context).textTheme.bodyMedium!.color,
                         ),
                       ),
                     );
                   }
-                  final chat_messages = snapshot.data!;
+                  final chatMessages = snapshot.data!;
+                  // Déplacer le défilement uniquement
                   WidgetsBinding.instance.addPostFrameCallback((_) {
                     if (_scrollController.hasClients) {
                       _scrollController.animateTo(
@@ -1151,12 +1424,16 @@ class _DashboardPageState extends State<DashboardPage>
                       );
                     }
                   });
+                  // Vérifier le dernier message pour TTS
+                  if (chatMessages.isNotEmpty) {
+                    _handleNewMessage(chatMessages.first);
+                  }
                   return ListView.builder(
                     reverse: true,
                     controller: _scrollController,
-                    itemCount: chat_messages.length,
+                    itemCount: chatMessages.length,
                     itemBuilder: (context, index) {
-                      final message = chat_messages[index];
+                      final message = chatMessages[index];
                       bool isUser = message.type == MessageType.user;
                       return Align(
                         alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
@@ -1164,32 +1441,38 @@ class _DashboardPageState extends State<DashboardPage>
                           margin: const EdgeInsets.all(8),
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
-                            color: isUser ? Colors.blue[200] : Colors.grey[300],
+                            color: isUser
+                                ? (Theme.of(context).brightness == Brightness.dark
+                                    ? Color(0xFF4A6070)
+                                    : Colors.blue[200])
+                                : Theme.of(context).brightness == Brightness.dark
+                                    ? Colors.grey[700]
+                                    : Colors.grey[300],
                             borderRadius: BorderRadius.circular(15),
                           ),
                           child: Column(
-                            crossAxisAlignment: isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                            crossAxisAlignment:
+                                isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                             children: [
-                              // Si le message n'est pas de l'utilisateur et est au format JSON, on affiche la réponse formatée
                               if (!isUser && isJson(message.content))
                                 buildSentenceResponseUI(message.content)
                               else
                                 SelectableText(
                                   message.content,
                                   style: GoogleFonts.roboto(
-                                    color: Colors.black87,
+                                    color: Theme.of(context).textTheme.bodyLarge!.color,
                                     fontSize: 14,
                                   ),
                                 ),
                               const SizedBox(height: 4),
-                              // N'affichez pas le statut si c'est "pending_validation" ou "validated"
                               if (!(message.status == MessageStatus.pending_validation ||
                                   message.status == MessageStatus.validated))
                                 Text(
                                   'Statut: ${message.status.toString().split('.').last}',
-                                  style: const TextStyle(fontSize: 12, color: Colors.black54),
+                                  style: TextStyle(
+                                      fontSize: 12,
+                                      color: Theme.of(context).textTheme.bodySmall!.color),
                                 ),
-                              // Affichage des boutons uniquement si le message est de type IA, en pending_validation et le contenu est au format JSON
                               if (message.type == MessageType.ai &&
                                   message.status == MessageStatus.pending_validation &&
                                   isJson(message.content))
@@ -1205,8 +1488,8 @@ class _DashboardPageState extends State<DashboardPage>
                                       },
                                       style: ElevatedButton.styleFrom(
                                         minimumSize: const Size(100, 40),
-                                        backgroundColor: Colors.grey[300],
-                                        foregroundColor: Colors.black54,
+                                        backgroundColor: Colors.grey[500],
+                                        foregroundColor: Colors.white,
                                         textStyle: const TextStyle(fontSize: 16),
                                       ),
                                       child: const Text('Valider'),
@@ -1216,10 +1499,15 @@ class _DashboardPageState extends State<DashboardPage>
                                       onPressed: () {
                                         _showEditMessageDialog(message, isAIMessage: true);
                                       },
-                                      icon: const Icon(Icons.edit, size: 16, color: Colors.black54),
-                                      label: const Text(
+                                      icon: Icon(Icons.edit,
+                                          size: 16,
+                                          color: Theme.of(context).textTheme.bodySmall!.color),
+                                      label: Text(
                                         'Modifier',
-                                        style: TextStyle(fontSize: 12, color: Colors.black54),
+                                        style: TextStyle(
+                                            fontSize: 12,
+                                            color:
+                                                Theme.of(context).textTheme.bodySmall!.color),
                                       ),
                                     ),
                                   ],
@@ -1243,17 +1531,19 @@ class _DashboardPageState extends State<DashboardPage>
                     decoration: InputDecoration(
                       hintText: 'Posez votre question...',
                       filled: true,
-                      fillColor: Colors.grey[200],
+                      fillColor: Theme.of(context).inputDecorationTheme.fillColor,
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(20),
-                        borderSide: BorderSide(color: Colors.grey[400]!),
+                        borderSide: BorderSide(color: Theme.of(context).dividerColor),
                       ),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 16.0),
+                      contentPadding:
+                          const EdgeInsets.symmetric(horizontal: 12.0, vertical: 16.0),
                     ),
-                    style: const TextStyle(color: Colors.black87),
+                    style: TextStyle(color: Theme.of(context).textTheme.bodyLarge!.color),
                     onSubmitted: (value) async {
                       if (value.isNotEmpty) {
                         await _sendMessage(value);
+                        _chatController.clear();
                       }
                     },
                   ),
@@ -1264,9 +1554,10 @@ class _DashboardPageState extends State<DashboardPage>
                   child: ScaleTransition(
                     scale: _animation,
                     child: CircleAvatar(
-                      backgroundColor: _isListening ? Colors.redAccent : Colors.grey[400],
+                      backgroundColor:
+                          _isListening ? Colors.redAccent : Theme.of(context).iconTheme.color,
                       child: Icon(
-                        _isListening ? Icons.mic_off : Icons.mic,
+                        _isTtsEnabled ? Icons.mic_off : Icons.mic,
                         color: Colors.white,
                       ),
                     ),
@@ -1276,9 +1567,11 @@ class _DashboardPageState extends State<DashboardPage>
                 IconButton(
                   icon: Icon(
                     _isTtsEnabled ? Icons.headset : Icons.headset_off,
-                    color: _isTtsEnabled ? Colors.blueAccent : Colors.grey,
+                    color: _isTtsEnabled ? Colors.blueAccent : Theme.of(context).iconTheme.color,
                   ),
-                  tooltip: _isTtsEnabled ? 'Désactiver la lecture vocale' : 'Activer la lecture vocale',
+                  tooltip: _isTtsEnabled
+                      ? 'Désactiver la lecture vocale'
+                      : 'Activer la lecture vocale',
                   onPressed: () {
                     if (!mounted) return;
                     setState(() {
@@ -1286,26 +1579,32 @@ class _DashboardPageState extends State<DashboardPage>
                     });
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
-                        content: Text(_isTtsEnabled ? 'Lecture vocale activée' : 'Lecture vocale désactivée'),
+                        content: Text(_isTtsEnabled
+                            ? 'Lecture vocale activée'
+                            : 'Lecture vocale désactivée'),
                       ),
                     );
                   },
                 ),
                 const SizedBox(width: 8),
                 IconButton(
-                  icon: Icon(Icons.settings_voice, color: Colors.blueGrey[800]),
-                  tooltip: 'Paramètres de Voix',
+                  icon: Icon(
+                    Icons.tune,
+                    color: Theme.of(context).iconTheme.color,
+                  ),
+                  tooltip: 'Réglages vocaux',
                   onPressed: _openVoiceSettings,
                 ),
                 const SizedBox(width: 8),
                 CircleAvatar(
-                  backgroundColor: Colors.grey[400],
+                  backgroundColor: Theme.of(context).primaryColor,
                   child: IconButton(
                     icon: const Icon(Icons.send, color: Colors.white),
                     onPressed: () async {
                       if (_chatController.text.isNotEmpty) {
                         await _sendMessage(_chatController.text);
                         _chatController.clear();
+                        setState(() {});
                       }
                     },
                   ),
@@ -1389,7 +1688,8 @@ class _DashboardPageState extends State<DashboardPage>
           ctrlMap['phone'] = TextEditingController(text: contact['phone'] ?? '');
           ctrlMap['address'] = TextEditingController(text: contact['address'] ?? '');
           ctrlMap['company'] = TextEditingController(text: contact['company'] ?? '');
-          ctrlMap['externalInfo'] = TextEditingController(text: contact['externalInfo'] ?? '');
+          ctrlMap['externalInfo'] =
+              TextEditingController(text: contact['externalInfo'] ?? '');
           break;
         case 'modify_document':
           ctrlMap['folderName'] = TextEditingController(text: data['folderName'] ?? '');
@@ -1427,6 +1727,12 @@ class _DashboardPageState extends State<DashboardPage>
                   onPressed: () => Navigator.of(context).pop(),
                 ),
                 ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Theme.of(context).brightness == Brightness.dark
+                        ? const Color(0xFF4A6070)
+                        : Colors.blue[200],
+                    foregroundColor: Colors.white,
+                  ),
                   child: const Text('Valider'),
                   onPressed: () async {
                     for (int i = 0; i < items.length; i++) {
@@ -1545,10 +1851,8 @@ class _DashboardPageState extends State<DashboardPage>
     );
   }
 
-  List<Widget> _buildEditableFields(
-      Map<String, dynamic> jsonContent,
-      Map<String, TextEditingController> ctrlMap,
-      VoidCallback onFieldChanged) {
+  List<Widget> _buildEditableFields(Map<String, dynamic> jsonContent,
+      Map<String, TextEditingController> ctrlMap, VoidCallback onFieldChanged) {
     final String action = jsonContent['action'] ?? '';
     switch (action) {
       case 'create_task':
@@ -1794,7 +2098,7 @@ class _DashboardPageState extends State<DashboardPage>
       child: Card(
         elevation: 4,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        color: Colors.white,
+        color: Theme.of(context).cardColor,
         child: Padding(
           padding: const EdgeInsets.all(16.0),
           child: Column(
@@ -1805,7 +2109,7 @@ class _DashboardPageState extends State<DashboardPage>
                 style: GoogleFonts.roboto(
                   fontSize: 16,
                   fontWeight: FontWeight.bold,
-                  color: neutralDark,
+                  color: Theme.of(context).textTheme.bodyLarge!.color,
                 ),
               ),
               const SizedBox(height: 10),
@@ -1813,7 +2117,7 @@ class _DashboardPageState extends State<DashboardPage>
                 'Aucune notification pour le moment.',
                 style: GoogleFonts.roboto(
                   fontSize: 16,
-                  color: Colors.grey[600],
+                  color: Theme.of(context).textTheme.bodyMedium!.color,
                 ),
               ),
             ],
@@ -1827,7 +2131,7 @@ class _DashboardPageState extends State<DashboardPage>
     return Card(
       elevation: 4,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      color: Colors.white,
+      color: Theme.of(context).cardColor,
       child: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
@@ -1838,7 +2142,7 @@ class _DashboardPageState extends State<DashboardPage>
               style: GoogleFonts.roboto(
                 fontSize: 16,
                 fontWeight: FontWeight.bold,
-                color: neutralDark,
+                color: Theme.of(context).textTheme.bodyLarge!.color,
               ),
             ),
             const SizedBox(height: 10),
@@ -1848,42 +2152,159 @@ class _DashboardPageState extends State<DashboardPage>
                       'Aucun utilisateur connecté.',
                       style: GoogleFonts.roboto(
                         fontSize: 16,
-                        color: Colors.grey[600],
+                        color: Theme.of(context).textTheme.bodyMedium!.color,
                       ),
                     ),
                   )
-                : Column(
-                    children: _connectedUsers.map((user) {
-                      return ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: Colors.blueAccent,
-                          child: Text(
-                            user.displayName.isNotEmpty
-                                ? user.displayName[0].toUpperCase()
-                                : '?',
-                            style: const TextStyle(color: Colors.white),
-                          ),
-                        ),
-                        title: Text(
-                          user.displayName,
-                          style: GoogleFonts.roboto(
-                            fontWeight: FontWeight.bold,
-                            color: Colors.black87,
-                          ),
-                        ),
-                        subtitle: Text(
-                          'Statut: ${user.isOnline ? 'En Ligne' : 'Hors Ligne'}',
-                          style: GoogleFonts.roboto(
-                            color: Colors.grey[600],
-                          ),
-                        ),
-                        trailing: Icon(
-                          user.isOnline ? Icons.circle : Icons.circle_outlined,
-                          color: user.isOnline ? Colors.green : Colors.red,
-                          size: 16,
-                        ),
-                      );
-                    }).toList(),
+                : SizedBox(
+                    height: 200,
+                    child: StreamBuilder<QuerySnapshot>(
+                      stream: _firestore
+                          .collection('workspaces')
+                          .doc(workspaceId)
+                          .collection('users')
+                          .snapshots(),
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState == ConnectionState.waiting) {
+                          return const Center(child: CircularProgressIndicator());
+                        }
+                        if (snapshot.hasError) {
+                          return Center(
+                            child: Text(
+                              'Erreur: ${snapshot.error}',
+                              style: const TextStyle(color: Colors.red),
+                            ),
+                          );
+                        }
+                        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                          return Center(
+                            child: Text(
+                              'Aucun utilisateur dans le workspace.',
+                              style: GoogleFonts.roboto(
+                                fontSize: 16,
+                                color: Theme.of(context).textTheme.bodyMedium!.color,
+                              ),
+                            ),
+                          );
+                        }
+
+                        final users = snapshot.data!.docs
+                            .map((doc) => UserModel.fromFirestore(doc))
+                            .toList();
+
+                        return ListView.builder(
+                          itemCount: users.length,
+                          itemBuilder: (context, index) {
+                            final user = users[index];
+                            return FutureBuilder<Uint8List?>(
+                              future: _loadProfileImage(user.photoURL),
+                              builder: (context, imageSnapshot) {
+                                return ListTile(
+                                  leading: Container(
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                        color: user.isOnline ? Colors.green : Colors.grey,
+                                        width: 2,
+                                      ),
+                                    ),
+                                    child: CircleAvatar(
+                                      radius: 20,
+                                      backgroundColor: Colors.grey[500],
+                                      backgroundImage: imageSnapshot.data != null
+                                          ? MemoryImage(imageSnapshot.data!)
+                                          : (user.photoURL != null && user.photoURL!.isNotEmpty
+                                              ? NetworkImage(user.photoURL!)
+                                              : null) as ImageProvider?,
+                                      foregroundImage: null,
+                                      child: imageSnapshot.data == null &&
+                                              (user.photoURL == null || user.photoURL!.isEmpty)
+                                          ? Text(
+                                              user.displayName.isNotEmpty
+                                                  ? user.displayName[0].toUpperCase()
+                                                  : '?',
+                                              style: TextStyle(
+                                                color: Theme.of(context)
+                                                    .textTheme
+                                                    .bodyLarge!
+                                                    .color,
+                                              ),
+                                            )
+                                          : null,
+                                    ),
+                                  ),
+                                  title: Text(
+                                    user.displayName,
+                                    style: GoogleFonts.roboto(
+                                      fontWeight: FontWeight.bold,
+                                      color: Theme.of(context).textTheme.bodyLarge!.color,
+                                    ),
+                                  ),
+                                  subtitle: user.isOnline
+                                      ? Text(
+                                          'En ligne',
+                                          style: GoogleFonts.roboto(
+                                            color: Colors.green,
+                                            fontSize: 12,
+                                          ),
+                                        )
+                                      : StreamBuilder<DocumentSnapshot>(
+                                          stream: _firestore
+                                              .collection('workspaces')
+                                              .doc(workspaceId)
+                                              .collection('users')
+                                              .doc(user.id)
+                                              .snapshots(),
+                                          builder: (context, snapshot) {
+                                            if (!snapshot.hasData) return const SizedBox.shrink();
+                                            final data =
+                                                snapshot.data!.data() as Map<String, dynamic>?;
+                                            final lastSeen = data?['lastSeen'] as Timestamp?;
+                                            if (lastSeen == null) {
+                                              return Text(
+                                                'Hors ligne',
+                                                style: GoogleFonts.roboto(
+                                                  color:
+                                                      Theme.of(context).textTheme.bodyMedium!.color,
+                                                  fontSize: 12,
+                                                ),
+                                              );
+                                            }
+                                            final now = DateTime.now();
+                                            final lastSeenDate = lastSeen.toDate();
+                                            final difference = now.difference(lastSeenDate);
+
+                                            String timeAgo;
+                                            if (difference.inMinutes < 60) {
+                                              timeAgo = '${difference.inMinutes} min';
+                                            } else if (difference.inHours < 24) {
+                                              timeAgo = '${difference.inHours} h';
+                                            } else {
+                                              timeAgo = '${difference.inDays} j';
+                                            }
+
+                                            return Text(
+                                              'Hors ligne depuis $timeAgo',
+                                              style: GoogleFonts.roboto(
+                                                color:
+                                                    Theme.of(context).textTheme.bodyMedium!.color,
+                                                fontSize: 12,
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                  trailing: Icon(
+                                    user.isOnline ? Icons.circle : Icons.circle_outlined,
+                                    color: user.isOnline ? Colors.green : Colors.grey[400],
+                                    size: 16,
+                                  ),
+                                );
+                              },
+                            );
+                          },
+                        );
+                      },
+                    ),
                   ),
           ],
         ),
@@ -1894,41 +2315,68 @@ class _DashboardPageState extends State<DashboardPage>
   @override
   Widget build(BuildContext context) {
     final authService = Provider.of<AuthService>(context, listen: false);
-    return Scaffold(
-      backgroundColor: const Color.fromARGB(255, 197, 197, 197),
-      body: SafeArea(
-        child: Stack(
-          children: [
-            LayoutBuilder(
-              builder: (context, constraints) {
-                return Column(
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        IconButton(
-                          icon: const Icon(Icons.logout),
-                          tooltip: 'Déconnexion',
-                          onPressed: () async {
-                            await authService.signOut();
-                            if (!mounted) return;
-                            Navigator.pushReplacementNamed(context, '/');
-                          },
-                        ),
-                      ],
-                    ),
-                    Expanded(
-                      child: constraints.maxWidth < 600
-                          ? _buildMobileLayout()
-                          : _buildDesktopLayout(),
-                    ),
-                  ],
-                );
-              },
-            ),
-            if (MediaQuery.of(context).size.width < 600)
-              _buildVoiceChatContainer(),
-          ],
+
+    return Consumer<ThemeProvider>(
+      builder: (context, themeProvider, _) => Scaffold(
+      
+        backgroundColor: themeProvider.themeData.scaffoldBackgroundColor,
+        body: SafeArea(
+          child: Stack(
+            children: [
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  return Column(
+                    children: [
+                     Row(
+  mainAxisAlignment: MainAxisAlignment.end,
+  children: [
+    // Thème clair / sombre
+    IconButton(
+      icon: Icon(
+        themeProvider.isDarkMode ? Icons.wb_sunny : Icons.nightlight_round,
+        color: themeProvider.themeData.iconTheme.color,
+      ),
+      tooltip: themeProvider.isDarkMode
+          ? 'Passer au thème clair'
+          : 'Passer au thème sombre',
+      onPressed: () => themeProvider.toggleTheme(),
+    ),
+    // ⚙️ Réglages à côté du soleil/lune
+    IconButton(
+      icon: Icon(
+        Icons.settings,
+        color: themeProvider.themeData.iconTheme.color,
+      ),
+      tooltip: 'Réglages',
+      onPressed: _openReconfigureWorkspace,
+    ),
+    // Déconnexion
+    IconButton(
+      icon: Icon(
+        Icons.logout,
+        color: themeProvider.themeData.iconTheme.color,
+      ),
+      tooltip: 'Déconnexion',
+      onPressed: () async {
+        await authService.signOut();
+        if (!mounted) return;
+        Navigator.pushReplacementNamed(context, '/');
+      },
+    ),
+  ],
+),
+                      Expanded(
+                        child: constraints.maxWidth < 600
+                            ? _buildMobileLayout()
+                            : _buildDesktopLayout(),
+                      ),
+                    ],
+                  );
+                },
+              ),
+              if (MediaQuery.of(context).size.width < 600) _buildVoiceChatContainer(),
+            ],
+          ),
         ),
       ),
     );
@@ -1938,7 +2386,6 @@ class _DashboardPageState extends State<DashboardPage>
     return SingleChildScrollView(
       child: Column(
         children: [
-          // Cartes de fonctionnalités
           Padding(
             padding: const EdgeInsets.all(16.0),
             child: Wrap(
@@ -1948,44 +2395,77 @@ class _DashboardPageState extends State<DashboardPage>
             ),
           ),
           const SizedBox(height: 16),
-          // Section Profil
-          Consumer<AuthService>(
-            builder: (context, authService, child) {
-              return GestureDetector(
-                onTap: () {
-                  _navigateToProfile();
-                },
-                child: Column(
-                  children: [
-                    ProfileAvatar(radius: 30),
-                    const SizedBox(height: 10),
-                    Text(
-                      authService.currentUser?.displayName ?? 'Utilisateur',
-                      style: GoogleFonts.roboto(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
+          StreamBuilder<User?>(
+            stream: FirebaseAuth.instance.userChanges(),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const CircularProgressIndicator();
+              }
+              User? user = snapshot.data;
+              if (user == null) {
+                return const Text('Utilisateur non connecté');
+              }
+              return kIsWeb
+                  ? FutureBuilder<Uint8List?>(
+                      future: _loadProfileImage(user.photoURL),
+                      builder: (context, imageSnapshot) {
+                        return GestureDetector(
+                          onTap: _navigateToProfile,
+                          child: Column(
+                            children: [
+                              ProfileAvatar(
+                                radius: 30,
+                                photoURL: user.photoURL,
+                                displayImageBytes: imageSnapshot.data,
+                              ),
+                              const SizedBox(height: 10),
+                              Text(
+                                user.displayName ?? 'Utilisateur',
+                                style: GoogleFonts.roboto(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                  color: Theme.of(context).textTheme.bodyLarge!.color,
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    )
+                  : GestureDetector(
+                      onTap: _navigateToProfile,
+                      child: Column(
+                        children: [
+                          ProfileAvatar(
+                            radius: 30,
+                            photoURL: user.photoURL,
+                            displayImageBytes: null,
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            user.displayName ?? 'Utilisateur',
+                            style: GoogleFonts.roboto(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                              color: Theme.of(context).textTheme.bodyLarge!.color,
+                            ),
+                          ),
+                        ],
                       ),
-                    ),
-                  ],
-                ),
-              );
+                    );
             },
           ),
           const SizedBox(height: 16),
-          // Section Tâches à Venir
           Padding(
             padding: const EdgeInsets.all(16.0),
             child: _buildUpcomingTasksSection(),
           ),
           const SizedBox(height: 16),
-          // Section Utilisateurs Connectés
           Padding(
             padding: const EdgeInsets.all(16.0),
             child: _buildConnectedUsersSection(),
           ),
           const SizedBox(height: 16),
-          // Section Assistant IA
           Padding(
             padding: const EdgeInsets.all(16.0),
             child: _buildChatAssistantSection(),
@@ -1999,12 +2479,11 @@ class _DashboardPageState extends State<DashboardPage>
   Widget _buildDesktopLayout() {
     return Row(
       children: [
-        // Sidebar
         Container(
           width: 250,
           padding: const EdgeInsets.all(16.0),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: Theme.of(context).cardColor,
             borderRadius: BorderRadius.circular(12),
             boxShadow: const [
               BoxShadow(
@@ -2017,42 +2496,82 @@ class _DashboardPageState extends State<DashboardPage>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Section Profil
-              Consumer<AuthService>(
-                builder: (context, authService, child) {
-                  return GestureDetector(
-                    onTap: _navigateToProfile,
-                    child: Row(
-                      children: [
-                        ProfileAvatar(radius: 30),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            authService.currentUser?.displayName ?? 'Utilisateur',
-                            style: GoogleFonts.roboto(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.black87,
-                            ),
+              StreamBuilder<User?>(
+                stream: FirebaseAuth.instance.userChanges(),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const CircularProgressIndicator();
+                  }
+                  User? user = snapshot.data;
+                  if (user == null) {
+                    return const Text('Utilisateur non connecté');
+                  }
+return kIsWeb
+                      ? FutureBuilder<Uint8List?>(
+                          future: _loadProfileImage(user.photoURL),
+                          builder: (context, imageSnapshot) {
+                            return GestureDetector(
+                              onTap: _navigateToProfile,
+                              child: Row(
+                                children: [
+                                  ProfileAvatar(
+                                    radius: 30,
+                                    photoURL: user.photoURL,
+                                    displayImageBytes: imageSnapshot.data,
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      user.displayName ?? 'Utilisateur',
+                                      style: GoogleFonts.roboto(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold,
+                                        color: Theme.of(context).textTheme.bodyLarge!.color,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        )
+                      : GestureDetector(
+                          onTap: _navigateToProfile,
+                          child: Row(
+                            children: [
+                              ProfileAvatar(
+                                radius: 30,
+                                photoURL: user.photoURL,
+                                displayImageBytes: null,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  user.displayName ?? 'Utilisateur',
+                                  style: GoogleFonts.roboto(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                    color: Theme.of(context).textTheme.bodyLarge!.color,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
-                        ),
-                      ],
-                    ),
-                  );
+                        );
                 },
               ),
               const SizedBox(height: 20),
-              // Cartes de fonctionnalités
               Expanded(
                 child: ListView(
                   children: dashboardItems.map((item) => FeatureCard(item: item)).toList(),
                 ),
               ),
               const SizedBox(height: 20),
-              // Contrôles vocaux
               Container(
                 decoration: BoxDecoration(
-                  color: Colors.grey[100],
+                  color: Theme.of(context).brightness == Brightness.dark
+                      ? Colors.grey[800]
+                      : Colors.grey[100],
                   borderRadius: BorderRadius.circular(12),
                   boxShadow: const [
                     BoxShadow(
@@ -2071,7 +2590,9 @@ class _DashboardPageState extends State<DashboardPage>
                       child: ScaleTransition(
                         scale: _animation,
                         child: CircleAvatar(
-                          backgroundColor: _isListening ? Colors.redAccent : Colors.grey[400],
+                          backgroundColor: _isListening
+                              ? Colors.redAccent
+                              : Theme.of(context).iconTheme.color,
                           child: Icon(
                             _isTtsEnabled ? Icons.mic_off : Icons.mic,
                             color: Colors.white,
@@ -2082,7 +2603,9 @@ class _DashboardPageState extends State<DashboardPage>
                     IconButton(
                       icon: Icon(
                         _isTtsEnabled ? Icons.headset : Icons.headset_off,
-                        color: _isTtsEnabled ? Colors.blueAccent : Colors.grey,
+                        color: _isTtsEnabled
+                            ? Colors.blueAccent
+                            : Theme.of(context).iconTheme.color,
                         size: 28,
                       ),
                       tooltip: _isTtsEnabled ? 'Désactiver la lecture vocale' : 'Activer la lecture vocale',
@@ -2099,7 +2622,10 @@ class _DashboardPageState extends State<DashboardPage>
                       },
                     ),
                     IconButton(
-                      icon: Icon(Icons.settings_voice, color: Colors.blueGrey[800]),
+                      icon: Icon(
+                        Icons.settings_voice,
+                        color: Theme.of(context).iconTheme.color,
+                      ),
                       tooltip: 'Paramètres de Voix',
                       onPressed: _openVoiceSettings,
                     ),
@@ -2110,12 +2636,10 @@ class _DashboardPageState extends State<DashboardPage>
           ),
         ),
         const SizedBox(width: 16),
-        // Zone principale
         Expanded(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Assistant IA
               Expanded(
                 flex: 3,
                 child: Padding(
@@ -2123,7 +2647,6 @@ class _DashboardPageState extends State<DashboardPage>
                   child: _buildChatAssistantSection(),
                 ),
               ),
-              // Colonne droite
               Expanded(
                 flex: 1,
                 child: Padding(
@@ -2131,19 +2654,16 @@ class _DashboardPageState extends State<DashboardPage>
                   child: Column(
                     mainAxisSize: MainAxisSize.max,
                     children: [
-                      // Tâches à venir
                       Expanded(
                         flex: 5,
                         child: _buildUpcomingTasksSection(),
                       ),
                       const SizedBox(height: 16),
-                      // Utilisateurs connectés
                       Expanded(
                         flex: 3,
                         child: _buildConnectedUsersSection(),
                       ),
                       const SizedBox(height: 16),
-                      // Notifications
                       Expanded(
                         flex: 2,
                         child: _buildNotificationsSection(),
@@ -2169,7 +2689,7 @@ class _DashboardPageState extends State<DashboardPage>
                   ? MediaQuery.of(context).size.width - 40
                   : 100,
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.95),
+                color: Theme.of(context).cardColor.withOpacity(0.95),
                 borderRadius: BorderRadius.circular(16),
                 boxShadow: const [
                   BoxShadow(
@@ -2188,7 +2708,9 @@ class _DashboardPageState extends State<DashboardPage>
                     child: ScaleTransition(
                       scale: _animation,
                       child: CircleAvatar(
-                        backgroundColor: _isListening ? Colors.redAccent : Colors.grey[400],
+                        backgroundColor: _isListening
+                            ? Colors.redAccent
+                            : Theme.of(context).iconTheme.color,
                         child: Icon(
                           _isTtsEnabled ? Icons.mic_off : Icons.mic,
                           color: Colors.white,
@@ -2199,7 +2721,9 @@ class _DashboardPageState extends State<DashboardPage>
                   IconButton(
                     icon: Icon(
                       _isTtsEnabled ? Icons.headset : Icons.headset_off,
-                      color: _isTtsEnabled ? Colors.blueAccent : Colors.grey,
+                      color: _isTtsEnabled
+                          ? Colors.blueAccent
+                          : Theme.of(context).iconTheme.color,
                     ),
                     tooltip: _isTtsEnabled ? 'Désactiver la lecture vocale' : 'Activer la lecture vocale',
                     onPressed: () {
@@ -2215,7 +2739,10 @@ class _DashboardPageState extends State<DashboardPage>
                     },
                   ),
                   IconButton(
-                    icon: Icon(Icons.settings_voice, color: Colors.blueGrey[800]),
+                    icon: Icon(
+                      Icons.settings_voice,
+                      color: Theme.of(context).iconTheme.color,
+                    ),
                     tooltip: 'Paramètres de Voix',
                     onPressed: _openVoiceSettings,
                   ),
@@ -2324,11 +2851,11 @@ class _FeatureCardState extends State<FeatureCard>
           duration: const Duration(milliseconds: 200),
           child: Card(
             elevation: 4,
-            color: Colors.white,
+            color: Theme.of(context).cardColor,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             child: Container(
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: Theme.of(context).cardColor,
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Padding(
@@ -2338,17 +2865,17 @@ class _FeatureCardState extends State<FeatureCard>
                     Icon(
                       widget.item.icon,
                       size: 30,
-                      color: Colors.grey[800],
+                      color: Theme.of(context).iconTheme.color,
                     ),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
                         widget.item.title,
                         style: GoogleFonts.roboto(
-                          textStyle: const TextStyle(
+                          textStyle: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.bold,
-                            color: Colors.black87,
+                            color: Theme.of(context).textTheme.bodyLarge!.color,
                           ),
                         ),
                       ),
@@ -2364,15 +2891,18 @@ class _FeatureCardState extends State<FeatureCard>
   }
 }
 
+// Ajout du champ photoURL dans UserModel
 class UserModel {
   final String id;
   final String displayName;
   final bool isOnline;
+  final String? photoURL; // Nouveau champ pour la photo de profil
 
   UserModel({
     required this.id,
     required this.displayName,
     required this.isOnline,
+    this.photoURL,
   });
 
   factory UserModel.fromFirestore(DocumentSnapshot doc) {
@@ -2381,6 +2911,7 @@ class UserModel {
       id: doc.id,
       displayName: data['displayName'] ?? 'Utilisateur',
       isOnline: data['isOnline'] ?? false,
+      photoURL: data['photoURL'],
     );
   }
 }

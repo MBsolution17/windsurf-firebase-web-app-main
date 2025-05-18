@@ -1,5 +1,3 @@
-// lib/services/auth_service.dart
-
 import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
@@ -30,6 +28,7 @@ class AuthenticatedClient extends http.BaseClient {
 
 class AuthService extends ChangeNotifier {
   final FirebaseAuth _auth = FirebaseAuth.instance;
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   User? _user;
   bool _rememberMe = false;
 
@@ -45,12 +44,13 @@ class AuthService extends ChangeNotifier {
   gmail.GmailApi? _gmailApi;
 
   AuthService() {
-    _auth.authStateChanges().listen((User? user) {
+    _auth.authStateChanges().listen((User? user) async {
       _user = user;
       if (user == null) {
         _gmailApi = null;
       } else {
-        initializeUser(user);
+        await initializeUser(user);
+        await _updateUserOnlineStatus(user.uid, true); // Connecté
       }
       notifyListeners();
     });
@@ -77,7 +77,7 @@ class AuthService extends ChangeNotifier {
   /// Initialiser le document utilisateur dans Firestore
   Future<void> initializeUser(User user) async {
     try {
-      final userRef = FirebaseFirestore.instance.collection('users').doc(user.uid);
+      final userRef = _firestore.collection('users').doc(user.uid);
       await userRef.set({
         'email': user.email,
         'displayName': user.displayName,
@@ -87,6 +87,34 @@ class AuthService extends ChangeNotifier {
       print('Document utilisateur initialisé pour ${user.uid}');
     } catch (e) {
       print('Erreur lors de l\'initialisation du document utilisateur: $e');
+    }
+  }
+
+  /// Mettre à jour le statut en ligne dans le workspace
+  Future<void> _updateUserOnlineStatus(String uid, bool isOnline) async {
+    try {
+      // Récupérer tous les workspaces où l'utilisateur est membre
+      QuerySnapshot workspaceSnapshot = await _firestore
+          .collection('workspaces')
+          .where('members', arrayContains: uid)
+          .get();
+
+      for (var doc in workspaceSnapshot.docs) {
+        String workspaceId = doc.id;
+        await _firestore
+            .collection('workspaces')
+            .doc(workspaceId)
+            .collection('users')
+            .doc(uid)
+            .set({
+          'displayName': _user?.displayName ?? 'Utilisateur',
+          'isOnline': isOnline,
+          'lastUpdated': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+      print('Statut en ligne mis à jour pour $uid : $isOnline');
+    } catch (e) {
+      print('Erreur lors de la mise à jour du statut en ligne : $e');
     }
   }
 
@@ -118,9 +146,7 @@ class AuthService extends ChangeNotifier {
       );
 
       await _auth.signInWithCredential(credential);
-
       await _initGmailApi();
-      notifyListeners();
       await setRememberMe(true);
       print('Connexion avec Google réussie pour ${_auth.currentUser?.uid}');
       return true;
@@ -155,6 +181,7 @@ class AuthService extends ChangeNotifier {
       await setRememberMe(rememberDevice);
       if (credential.user != null) {
         await initializeUser(credential.user!);
+        await _updateUserOnlineStatus(credential.user!.uid, true);
       }
 
       print('Connexion avec email réussie pour ${credential.user?.uid}');
@@ -178,6 +205,7 @@ class AuthService extends ChangeNotifier {
 
       if (credential.user != null) {
         await initializeUser(credential.user!);
+        await _updateUserOnlineStatus(credential.user!.uid, true);
       }
 
       print('Création de compte réussie pour ${credential.user?.uid}');
@@ -190,6 +218,9 @@ class AuthService extends ChangeNotifier {
 
   /// Déconnexion
   Future<void> signOut() async {
+    if (_user != null) {
+      await _updateUserOnlineStatus(_user!.uid, false); // Hors ligne
+    }
     await _auth.signOut();
     await _googleSignIn.disconnect();
     _gmailApi = null;
@@ -233,6 +264,7 @@ ${bodyHtml ?? bodyText}
       await _auth.currentUser!.updateDisplayName(displayName);
       await _auth.currentUser!.reload();
       _user = _auth.currentUser;
+      await _updateUserOnlineStatus(_user!.uid, true); // Met à jour le nom dans les workspaces
       notifyListeners();
     }
   }
