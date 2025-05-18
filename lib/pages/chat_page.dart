@@ -18,7 +18,7 @@ import '../models/chat_message.dart' as myChat;
 
 // Constantes pour l'API OpenAI
 const String kApiKey =
-    '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';
+    '';
 const String kApiUrl = 'https://api.openai.com/v1/chat/completions';
 
 /// =========================================================
